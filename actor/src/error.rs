@@ -1,0 +1,25 @@
+//
+
+use thiserror::Error;
+
+/// Errors that can occur in the actor system.
+/// This enum defines the various errors that can occur when working with actors,
+/// such as when sending messages, starting actors, or handling messages.
+#[derive(Error, Debug)]
+pub enum Error {
+    /// Error when sending a message to an actor fails.
+    #[error("Failed to send message to actor: {0}")]
+    SendMessage(String),
+    /// Error when starting an actor fails.
+    #[error("Failed to start actor: {0}")]
+    StartActor(String),
+    /// Error when handling a message fails.
+    #[error("Failed to create actor: {0}")]
+    CreateActor(String),
+    ///
+    #[error("Sending event failed: {0}")]
+    SendEvent(String),
+    /// Supervision error.
+    #[error("Supervision error: {0}")]
+    Supervision(String),
+}
