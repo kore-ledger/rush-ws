@@ -82,6 +82,7 @@ impl ActorPath {
         if level < 1 || level >= self.level() {
             self.clone()
         } else if self.is_top_level() {
+            println!("At level called on top level path.");
             self.root()
         } else if level == self.level() - 1 {
             self.parent()
@@ -379,6 +380,12 @@ mod tests {
         assert_eq!(path.at_level(3), path.parent());
         assert_eq!(path.at_level(4), path);
         assert_eq!(path.at_level(5), path);
+
+        // Test at_level on top level path
+        let path = ActorPath::from("/acme");
+        assert_eq!(path.at_level(0), path);
+        assert_eq!(path.at_level(1), path.root());
+        assert_eq!(path.at_level(2), path);
     }
 
     #[test]

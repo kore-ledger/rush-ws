@@ -259,3 +259,66 @@ pub enum ActorLifecycle {
     /// The actor is terminated.
     Terminated,
 }
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+    use crate::{Actor, ActorPath, ActorContext, Error};
+
+    struct TestActor;
+
+    #[async_trait::async_trait]
+    impl Actor for TestActor {
+        type Message = String;
+        type Response = String;
+        type Event = ();
+
+        async fn handle(
+            &mut self,
+            _ctx: &mut ActorContext<Self>,
+            _sender: &ActorPath,
+            _msg: Self::Message,
+        ) -> Result<Self::Response, Error> {
+            println!("Handling message: {}", _msg);
+            assert_eq!(_msg, "Hello, Actor!");
+            Ok("ok".to_string())
+        }
+
+        async fn pre_start(
+            &mut self,
+            _ctx: &mut ActorContext<Self>,
+        ) -> Result<(), Error> {
+            println!("Pre-start called");
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_actor_runner_lifecycle() {
+        let actor = TestActor;
+        let actor_path = ActorPath::from("test_actor");
+        let registry: ActorRegistry = Arc::new(RwLock::new(HashMap::new()));
+        let (mut runner, actor_ref, _action_sender) =
+            ActorRunner::new(actor, actor_path, None, registry);
+
+        // Initialize the actor runner.
+        let (init_sender, init_receiver) = oneshot::channel();
+        tokio::spawn(async move {
+            runner.init(Some(init_sender)).await;
+        });
+        // Wait for initialization to complete.
+        let init_result = init_receiver.await.unwrap();
+        assert!(init_result.is_ok());
+        // Send a message to the actor.
+        actor_ref.tell(
+            "Hello, Actor!".to_string(),
+        ).await.unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
+
+}

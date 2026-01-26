@@ -66,9 +66,9 @@ pub trait Actor: Send + Sync + Sized + 'static {
     ///
     /// Returns an error if the actor could not be started.
     ///
-    async fn pre_start<A: Actor>(
+    async fn pre_start(
         &mut self,
-        _context: &mut ActorContext<A>,
+        _context: &mut ActorContext<Self>,
     ) -> Result<(), Error> {
         Ok(())
     }
@@ -77,9 +77,9 @@ pub trait Actor: Send + Sync + Sized + 'static {
     /// error occurs in [`Actor::pre_start()`]. By default it simply calls
     /// `pre_start()` again, but you can also choose to reinitialize the actor
     /// in some other way.
-    async fn pre_restart<A: Actor>(
+    async fn pre_restart(
         &mut self,
-        ctx: &mut ActorContext<A>,
+        ctx: &mut ActorContext<Self>,
     ) -> Result<(), Error> {
         self.pre_start(ctx).await
     }
@@ -100,9 +100,9 @@ pub trait Actor: Send + Sync + Sized + 'static {
     ///
     /// Returns an error if the actor could not be stopped.
     ///
-    async fn pre_stop<A: Actor>(
+    async fn pre_stop(
         &mut self,
-        _ctx: &mut ActorContext<A>,
+        _ctx: &mut ActorContext<Self>,
     ) -> Result<(), Error> {
         Ok(())
     }
@@ -113,9 +113,9 @@ pub trait Actor: Send + Sync + Sized + 'static {
     ///
     /// * `context` - The context of the actor.
     ///
-    async fn post_stop<A: Actor>(
+    async fn post_stop(
         &mut self,
-        _ctx: &mut ActorContext<A>,
+        _ctx: &mut ActorContext<Self>,
     ) -> Result<(), Error> {
         Ok(())
     }
@@ -132,9 +132,9 @@ pub trait Actor: Send + Sync + Sized + 'static {
     ///
     /// An optional response to the message.
     ///
-    async fn handle<A: Actor>(
+    async fn handle(
         &mut self,
-        ctx: &mut ActorContext<A>,
+        ctx: &mut ActorContext<Self>,
         sender: &ActorPath,
         msg: Self::Message,
     ) -> Result<Self::Response, Error>;
@@ -149,10 +149,10 @@ pub trait Actor: Send + Sync + Sized + 'static {
     /// * `event` - The event to handle.
     /// * `ctx` - The actor context.
     ///
-    async fn on_event<A: Actor>(
+    async fn on_event(
         &mut self,
         _event: Self::Event,
-        _ctx: &mut ActorContext<A>,
+        _ctx: &mut ActorContext<Self>,
     ) {
         // Default implementation.
     }
@@ -175,11 +175,11 @@ pub trait Actor: Send + Sync + Sized + 'static {
     ///
     /// Returns an error if the error could not be handled.
     ///
-    async fn on_child_error<A: Actor>(
+    async fn on_child_error(
         &mut self,
         _child: &ActorPath,
         error: &Error,
-        _ctx: &mut ActorContext<A>,
+        _ctx: &mut ActorContext<Self>,
     ) {
         // Default implementation from child actor errors.
         debug!("Handling error: {:?}", error);
@@ -203,11 +203,11 @@ pub trait Actor: Send + Sync + Sized + 'static {
     ///
     /// Returns an error if the fault could not be handled.
     ///
-    async fn on_child_fault<A: Actor>(
+    async fn on_child_fault(
         &mut self,
         _child: &ActorPath,
         error: &Error,
-        _ctx: &mut ActorContext<A>,
+        _ctx: &mut ActorContext<Self>,
     ) {
         // Default implementation from child actor errors.
         debug!("Handling fault: {:?}", error);
@@ -320,6 +320,12 @@ impl<A: Actor> ActorContext<A> {
     ///  
     pub fn current_error(&self) -> Option<&Error> {
         self.current_error.as_ref()
+    }
+
+    /// Clears the current error in the context.
+    ///
+    pub fn clear_current_error(&mut self) {
+        self.current_error = None;
     }
 
     /// Restarts the actor by calling its `pre_restart` method.
@@ -472,6 +478,18 @@ where
     pub async fn ask(&self, msg: A::Message) -> Result<A::Response, Error> {
         self.handler.ask(self.path.clone(), msg).await
     }
+
+    /// Subscribes to the actor event bus.
+    /// This will return an event receiver that can be used to receive events from the actor.
+    /// The event receiver will receive events that the actor emits after processing a message.
+    ///
+    /// # Returns
+    ///
+    /// Returns an event receiver.
+    ///
+    pub fn subscribe(&self) -> EventReceiver<<A as Actor>::Event> {
+        self.event_receiver.resubscribe()
+    }
 }
 
 /// Clone implementation for ActorRef.
@@ -485,5 +503,91 @@ where
             handler: self.handler.clone(),
             event_receiver: self.event_receiver.resubscribe(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Actor, ActorPath, Response, Message, Event, handler::mailbox};
+    use serde::{Serialize, Deserialize};
+    use std::time::Duration;
+    use tokio::time::sleep;
+    use tokio::sync::broadcast;
+
+    struct TestActor;
+
+    #[async_trait::async_trait]
+    impl Actor for TestActor {
+        type Message = TestMessage;
+        type Response = TestResponse;
+        type Event = TestEvent;
+
+        async fn handle(
+            &mut self,
+            _ctx: &mut ActorContext<Self>,
+            _sender: &ActorPath,
+            msg: Self::Message,
+        ) -> Result<Self::Response, Error> {
+            match msg {
+                TestMessage::Ping => Ok(TestResponse::Pong),
+            }
+        }
+    }
+
+    enum TestMessage {
+        Ping,
+    }
+    impl Message for TestMessage {}
+
+    enum TestResponse {
+        Pong,
+    }
+    impl Response for TestResponse {}
+
+    #[derive(Serialize, Deserialize, Debug, Clone)]
+    enum TestEvent {
+        Started,
+        Stopped,
+    }
+    impl Event for TestEvent {}
+
+    #[tokio::test]
+    async fn test_actor_ref_tell_ask() {
+        let (sender, mut receiver) = mailbox::<TestActor>(10);
+        let handler = HandlerHelper::new(sender);
+        let actor_path = ActorPath::from("test_actor");
+        let (event_sender, _event_receiver) = broadcast::channel(10);
+        let context = ActorContext::new(
+            actor_path.clone(),
+            SupervisionHandler::default(),
+            event_sender,
+            None,
+        );
+        let actor_ref = ActorRef::new(
+            actor_path.clone(),
+            handler,
+            tokio::sync::broadcast::channel(10).1,
+        );
+
+        // Spawn a task to process messages
+        tokio::spawn(async move {
+            let mut actor = TestActor;
+            let mut ctx = context;
+            while let Some(msg) = receiver.recv().await {
+                msg.handle(&mut actor, &mut ctx).await;
+            }
+        });
+
+        // Test tell
+        assert!(actor_ref.tell(TestMessage::Ping).await.is_ok());
+        sleep(Duration::from_millis(100)).await;
+        // Test ask
+        let response = actor_ref.ask(TestMessage::Ping).await;
+        assert!(response.is_ok());
+        match response.unwrap() {
+            TestResponse::Pong => {}
+        }
+
     }
 }

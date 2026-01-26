@@ -183,203 +183,68 @@ impl<A: Actor> Clone for HandlerHelper<A> {
 
 #[cfg(test)]
 mod tests {
-/* 
     use super::*;
-    use crate::{
-        Actor, ActorContext, ActorPath, Error, Event, Message, Response,
-    };
-    use std::collections::VecDeque;
-    use std::sync::{Arc, Mutex};
-    use tokio::sync::broadcast;
+    use crate::{Actor, ActorPath, Response, Message, Event};
+    use tokio::time::{sleep, Duration};
 
-    use async_trait::async_trait;
-
-    #[derive(Debug)]
-    struct TestActor {
-        pub received_messages: Arc<Mutex<VecDeque<String>>>,
-    }
+    struct TestActor;
 
     impl Message for String {}
-    impl Event for () {}
+
     impl Response for String {}
 
-    #[async_trait]
+    impl Event for () {}
+
+    #[async_trait::async_trait]
     impl Actor for TestActor {
         type Message = String;
-        type Event = ();
         type Response = String;
-        async fn handle<A: Actor>(
+        type Event = ();
+
+        async fn handle(
             &mut self,
-            _ctx: &mut ActorContext<A>,
+            _ctx: &mut ActorContext<Self>,
             _sender: &ActorPath,
             msg: Self::Message,
         ) -> Result<Self::Response, Error> {
-            let mut messages = self.received_messages.lock().unwrap();
-            messages.push_back(msg.clone());
             Ok(format!("Received: {}", msg))
         }
     }
 
-    #[test]
-    fn text_debug_actor_message() {
-        let actor_path = ActorPath::from("test_actor");
-        let (resp_sender, _resp_receiver) = oneshot::channel();
-        let msg = ActorMessage::<TestActor>::new(
-            actor_path.clone(),
-            "Hello, Actor!".to_string(),
-            Some(resp_sender),
-        );
-        let debug_str = format!("{:?}", msg);
-        assert!(debug_str.contains("test_actor"));
-        assert!(debug_str.contains("<message>"));
-        assert!(debug_str.contains("<oneshot::Sender>"));
-    }
-
     #[tokio::test]
     async fn test_tell_and_ask() {
-        //tracing_subscriber::fmt::init();
         let (sender, mut receiver) = mailbox::<TestActor>(10);
-        let (signal_sender, _signal_receiver) = mpsc::channel(10);
-        let (event_sender, _event_receiver) =
-            broadcast::channel::<<TestActor as Actor>::Event>(10);
         let handler = HandlerHelper::new(sender);
-        let received_messages = Arc::new(Mutex::new(VecDeque::new()));
-        let mut actor = TestActor {
-            received_messages: received_messages.clone(),
-        };
-        let actor_path = ActorPath::from("test_actor");
+
+        // Spawn a task to process messages
+        tokio::spawn(async move {
+            let mut actor = TestActor;
+            let mut ctx = ActorContext::new(
+                ActorPath::from("test_actor"),
+                // Dummy supervision handler
+                crate::system::SupervisionHandler::default(),
+                tokio::sync::broadcast::channel(10).0,
+                None,
+            );
+            while let Some(msg) = receiver.recv().await {
+                msg.handle(&mut actor, &mut ctx).await;
+            }
+        });
+
         // Test tell
         handler
-            .tell(actor_path.clone(), "Hello, Actor!".to_string())
+            .tell(ActorPath::from("sender_actor"), "Hello".to_string())
             .await
             .unwrap();
-        // Process the message
-        if let Some(msg) = receiver.recv().await {
-            msg.handle(
-                &mut actor,
-                &mut ActorContext::new(
-                    actor_path.clone(),
-                    None,
-                    signal_sender.clone(),
-                    event_sender.clone(),
-                    None,
-                ),
-            )
-            .await;
-        }
-        {
-            let messages = received_messages.lock().unwrap();
-            assert_eq!(messages.len(), 1);
-            assert_eq!(messages[0], "Hello, Actor!");
-        }
+
+        // Allow some time for the message to be processed
+        sleep(Duration::from_millis(100)).await;
+
         // Test ask
-        let value = actor_path.clone();
-        tokio::spawn(async move {
-            if let Some(msg) = receiver.recv().await {
-                msg.handle(
-                    &mut actor,
-                    &mut ActorContext::new(
-                        value,
-                        None,
-                        signal_sender.clone(),
-                        event_sender.clone(),
-                        None,
-                    ),
-                )
-                .await;
-            }
-        });
         let response = handler
-            .ask(actor_path.clone(), "How are you?".to_string())
+            .ask(ActorPath::from("sender_actor"), "World".to_string())
             .await
             .unwrap();
-        assert_eq!(response, "Received: How are you?");
-        {
-            let messages = received_messages.lock().unwrap();
-            assert_eq!(messages.len(), 2);
-            assert_eq!(messages[1], "How are you?");
-        }
+        assert_eq!(response, "Received: World");
     }
-
-    #[tokio::test]
-    async fn test_tell_error() {
-        //tracing_subscriber::fmt::init();
-        let (sender, receiver) = mailbox::<TestActor>(10);
-        //let (signal_sender, _signal_receiver) = mpsc::channel(10);
-        let handler = HandlerHelper::new(sender);
-        let actor_path = ActorPath::from("test_actor");
-        // Drop the receiver to simulate closed mailbox
-        drop(receiver);
-        let result = handler
-            .tell(actor_path.clone(), "Hello, Actor!".to_string())
-            .await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_ask_no_response() {
-        //tracing_subscriber::fmt::init();
-        let (sender, receiver) = mailbox::<TestActor>(10);
-        let handler = HandlerHelper::new(sender);
-        let received_messages = Arc::new(Mutex::new(VecDeque::new()));
-        let _actor = TestActor {
-            received_messages: received_messages.clone(),
-        };
-        let actor_path = ActorPath::from("test_actor");
-        // Drop the receiver to simulate no response scenario
-        drop(receiver);
-        let result = handler
-            .ask(actor_path.clone(), "Will I get a response?".to_string())
-            .await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_message_handle_error() {
-        //tracing_subscriber::fmt::init();
-        struct ErrorActor;
-        #[async_trait]
-        impl Actor for ErrorActor {
-            type Message = String;
-            type Event = ();
-            type Response = String;
-            async fn handle<A: Actor>(
-                &mut self,
-                _ctx: &mut ActorContext<A>,
-                _sender: &ActorPath,
-                _msg: Self::Message,
-            ) -> Result<Self::Response, Error> {
-                Err(Error::SendMessage("Intentional error".to_string()))
-            }
-        }
-        let (sender, mut receiver) = mailbox::<ErrorActor>(10);
-        let (event_sender, _event_receiver) =
-            broadcast::channel::<<TestActor as Actor>::Event>(10);
-        let (signal_sender, _signal_receiver) = mpsc::channel(10);
-        let handler = HandlerHelper::new(sender);
-        let actor_path = ActorPath::from("error_actor");
-        let value = actor_path.clone();
-        tokio::spawn(async move {
-            let mut actor = ErrorActor;
-            if let Some(msg) = receiver.recv().await {
-                let _ = msg
-                    .handle(
-                        &mut actor,
-                        &mut ActorContext::new(
-                            value,
-                            None,
-                            signal_sender.clone(),
-                            event_sender.clone(),
-                            None,
-                        ),
-                    )
-                    .await;
-            }
-        });
-        let result = handler
-            .ask(actor_path.clone(), "Trigger error".to_string())
-            .await;
-        assert!(result.is_err());
-    }
-    */
 }
