@@ -72,6 +72,8 @@ pub fn signal_channel(buffer: usize) -> (SignalSender, SignalReceiver) {
     mpsc::channel(buffer)
 }
 
+/// The actor system responsible for managing actors and supervision.
+///
 #[derive(Clone)]
 pub struct System {
     root_path: ActorPath,
@@ -126,6 +128,16 @@ impl System {
             .await
     }
 
+    /// Retrieves a child actor by name.
+    /// 
+    /// # Arguments
+    ///     
+    /// * `name` - The name of the child actor to retrieve.
+    ///
+    /// # Returns
+    ///     
+    /// * `Result<Option<ActorRef<A>>, Error>` - The actor reference if found, or None.
+    ///
     pub async fn get_actor<A>(&self, name: &str) -> Result<Option<ActorRef<A>>, Error>
     where
         A: Actor,
@@ -473,12 +485,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_actor() {
+    async fn test_system() {
         let mut system = System::new(CancellationToken::new());
         let actor_ref = system
             .create_actor(TestActor, "test_actor")
             .await
             .expect("Failed to create actor");
         assert_eq!(actor_ref.path().to_string(), "/user/test_actor");
+
+        let retrieved_ref: Option<ActorRef<TestActor>> = system
+            .get_actor("test_actor")
+            .await
+            .expect("Failed to get actor");
+        assert!(retrieved_ref.is_some());
+        assert_eq!(
+            retrieved_ref.unwrap().path().to_string(),
+            "/user/test_actor"
+        );
+        let removed_ref: Option<ActorRef<TestActor>> = system
+            .system_handler
+            .remove_child(&ActorPath::from("/user/test_actor"))
+            .await;
+        assert!(removed_ref.is_some()); 
     }
+
+
 }

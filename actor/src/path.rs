@@ -81,9 +81,6 @@ impl ActorPath {
     pub fn at_level(&self, level: usize) -> Self {
         if level < 1 || level >= self.level() {
             self.clone()
-        } else if self.is_top_level() {
-            println!("At level called on top level path.");
-            self.root()
         } else if level == self.level() - 1 {
             self.parent()
         } else {
@@ -403,5 +400,15 @@ mod tests {
         let s = String::from("/acme/building/room/sensor/");
         let path = ActorPath::from(&s);
         assert_eq!(path.0, vec!["acme", "building", "room", "sensor"]);
+    }
+    
+    #[test]
+    fn test_debug_format() {
+        let path = ActorPath::from("/acme/building/room/sensor");
+        let debug_str = format!("{:?}", path);
+        assert_eq!(debug_str, "/acme/building/room/sensor");
+        let path = ActorPath::from("/");
+        let debug_str = format!("{:?}", path);
+        assert_eq!(debug_str, "/");
     }
 }
