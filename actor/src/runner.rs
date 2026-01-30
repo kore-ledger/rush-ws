@@ -180,6 +180,8 @@ where
                     match action {
                         ChildAction::Stop => {
                             debug!("Actor {} received stop action.", &self.actor_path);
+                            // Stop child actors first
+                            
                             return ActorLifecycle::Stopped;
                         },
                         ChildAction::Restart => {
@@ -210,6 +212,8 @@ where
         match strategy {
             SupervisionStrategy::Stop => {
                 error!("Actor '{}' failed to start!", &self.actor_path);
+                // Stop childs first
+
                 self.lifecycle = ActorLifecycle::Stopped;
             }
             SupervisionStrategy::Retry(mut retry_strategy) => {

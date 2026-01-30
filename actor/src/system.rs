@@ -146,35 +146,52 @@ impl System {
         self.system_handler.get_actor(&child_path).await
     }
 
+    /// Handles a child actor error signal.
+    ///     
+    /// # Arguments
+    /// 
+    /// * `path` - The path of the child actor that encountered the error.
+    /// * `error` - The error encountered by the child actor.
+    /// 
     pub async fn on_child_error(
         &mut self,
         path: &ActorPath,
         error: &Error,
-    ) {
+    ) -> Result<(), Error> {
         error!("System received ChildError from {:?}: {:?}", path, error);
         // Handle system-level child error
+        Ok(())
     }
 
+    /// Handles a child actor fault signal.
+    ///     
+    /// # Arguments
+    /// 
+    /// * `path` - The path of the child actor that encountered the fault.
+    /// * `error` - The fault encountered by the child actor.
+    ///
     pub async fn on_child_fault(
         &mut self,
         path: &ActorPath,
         error: &Error,
-    ) {
+    ) -> Result<(), Error> {
         error!("System received ChildFault from {:?}: {:?}", path, error);
         // Handle system-level child fault
+        Ok(())
     }
 
-    /// Stops all child actors under supervision.
+    /// Stops all child actors under the system's supervision.
     ///
-    pub async fn stop_all_children(&self) {
-        self.system_handler.stop_all_children().await;
+    pub async fn stop(&mut self) -> Result<(), Error> {
+        self.system_handler.stop_children().await
     }
 
-    /// Restarts all child actors under supervision.
-    ///
-    pub async fn restart_all_children(&self) {
-        self.system_handler.restart_all_children().await;
+    /// Restarts all child actors under the system's supervision.
+    /// 
+    pub async fn restart(&mut self) -> Result<(), Error> {
+        self.system_handler.restart_children().await
     }
+
 }
 
 struct SystemRunner {
@@ -196,7 +213,7 @@ impl SystemRunner {
             tokio::select! {
                 _ = self.cancellation_token.cancelled() => {
                     debug!("SystemRunner received cancellation signal, shutting down.");
-                    self.system.stop_all_children().await;
+                    let _ = self.system.stop().await;
                     return;
                 }
                 Some(signal) = receiver.recv() => {
@@ -204,10 +221,10 @@ impl SystemRunner {
                     // Handle system-level signals here
                     match signal {
                         ActorSignal::ChildError(path, error) => {
-                            self.system.on_child_error(&path, &error).await;
+                            let _ = self.system.on_child_error(&path, &error).await;
                         }
                         ActorSignal::ChildFault(path, error) => {
-                            self.system.on_child_fault(&path, &error).await;
+                            let _ = self.system.on_child_fault(&path, &error).await;
                         }   
                     }
                 }
@@ -354,21 +371,6 @@ impl SupervisionHandler {
         Ok(self.registry.read().await.contains_key(path))
     }
 
-    /// Removes a child actor by name.
-    /// 
-    /// # Arguments
-    ///     
-    /// * `path` - The path of the child actor to remove.
-    /// 
-    /// # Returns
-    ///     
-    /// * `Result<(), Error>` - Ok if removed successfully, error otherwise.
-    /// 
-    pub async fn remove_child<A: Actor>(&self, path: &ActorPath) -> Option<ActorRef<A>> {
-        self.registry.write().await.remove(path)
-            .and_then(|any| any.downcast::<ActorRef<A>>().ok())
-            .map(|boxed_ref| *boxed_ref)}
-
     /// Stops a child actor by name.
     /// 
     /// # Arguments
@@ -425,7 +427,7 @@ impl SupervisionHandler {
 
     /// Stops all child actors under supervision.
     /// 
-    pub async fn stop_all_children(&self) {
+    pub async fn stop_children(&mut self) -> Result<(), Error> {
         let action_senders = self.action_senders.read().await;
         for (path, action_sender) in action_senders.iter() {
             if let Err(e) = action_sender.send(ChildAction::Stop).await {
@@ -433,13 +435,20 @@ impl SupervisionHandler {
                     "Failed to send stop action to child '{}': {:?}",
                     path, e
                 );
+                return Err(Error::Supervision(format!(
+                    "Failed to send stop action to child '{}': {:?}",
+                    path, e
+                )));
+            } else {
+                let _ = self.registry.write().await.remove(path);
             }
         }
+        Ok(())
     }
 
     /// Restarts all child actors under supervision.
     ///
-    pub async fn restart_all_children(&self) {
+    pub async fn restart_children(&self) -> Result<(), Error> {
         let action_senders = self.action_senders.read().await;
         for (path, action_sender) in action_senders.iter() {
             if let Err(e) = action_sender.send(ChildAction::Restart).await {
@@ -447,9 +456,14 @@ impl SupervisionHandler {
                     "Failed to send restart action to child '{}': {:?}",
                     path, e
                 );
+                return Err(Error::Supervision(format!(
+                    "Failed to send restart action to child '{}': {:?}",
+                    path, e
+                )));
             }
         }
-    }   
+        Ok(())
+    }
 }
 
 impl Default for SupervisionHandler {
@@ -482,31 +496,78 @@ mod tests {
         ) -> Result<Self::Response, Error> {
             Ok(format!("Received: {}", msg))
         }
+
+        async fn pre_start(
+            &mut self,
+            ctx: &mut ActorContext<Self>,
+        ) -> Result<(), Error> {
+            ctx.create_child(TestActor, "child").await?;
+            /*if ctx.child_exists("child").await? {
+                let child_ref = ctx.get_child::<TestActor>("child").await?;
+                assert!(child_ref.is_some());
+            }*/
+            Ok(())
+        }
+    }
+
+    struct TestErrorActor;
+
+    #[async_trait::async_trait]
+    impl Actor for TestErrorActor {
+        type Message = String;
+        type Response = String;
+        type Event = ();    
+
+        async fn handle(
+            &mut self,
+            _ctx: &mut ActorContext<Self>,
+            _sender: &ActorPath,
+            _msg: Self::Message,
+        ) -> Result<Self::Response, Error> {
+            Err(Error::Supervision("Test error".into()))
+        }
+
+        async fn pre_start(
+            &mut self,
+            _ctx: &mut ActorContext<Self>,
+        ) -> Result<(), Error> {
+            Err(Error::Supervision("Pre-start error".into()))
+        }
     }
 
     #[tokio::test]
-    async fn test_system() {
+    async fn test_system_actor() {
         let mut system = System::new(CancellationToken::new());
+        // Create a new actor
         let actor_ref = system
             .create_actor(TestActor, "test_actor")
             .await
             .expect("Failed to create actor");
         assert_eq!(actor_ref.path().to_string(), "/user/test_actor");
 
+        // Try creating an actor with the same name
+        let duplicate_result = system
+            .create_actor(TestActor, "test_actor")
+            .await;
+        assert!(duplicate_result.is_err());
+
+        // Retrieve the created actor
         let retrieved_ref: Option<ActorRef<TestActor>> = system
             .get_actor("test_actor")
             .await
             .expect("Failed to get actor");
         assert!(retrieved_ref.is_some());
+        let retrieved_ref = retrieved_ref.unwrap();
         assert_eq!(
-            retrieved_ref.unwrap().path().to_string(),
+            &retrieved_ref.path().to_string(),
             "/user/test_actor"
         );
-        let removed_ref: Option<ActorRef<TestActor>> = system
-            .system_handler
-            .remove_child(&ActorPath::from("/user/test_actor"))
+
+        // Stop the created actor
+        let stop_result = system
+            .stop()
             .await;
-        assert!(removed_ref.is_some()); 
+        assert!(stop_result.is_ok());
     }
 
 

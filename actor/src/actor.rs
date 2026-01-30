@@ -304,6 +304,41 @@ impl<A: Actor> ActorContext<A> {
         self.supervision_handler.get_actor(&child_path).await
     }
 
+    /// Checks if a child actor exists by name.
+    /// 
+    /// # Arguments
+    /// 
+    /// * `name` - The name of the child actor.
+    /// 
+    /// # Returns
+    /// 
+    /// * `Result<bool, Error>` - True if the child actor exists, false otherwise.
+    ///
+    pub async fn child_exists(&self, name: &str) -> Result<bool, Error> {
+        let child_path = self.path.clone() / name;
+        self.supervision_handler.child_exists(&child_path).await
+    }
+
+    /// Stops all child actors of this actor.
+    /// 
+    /// # Returns
+    /// 
+    /// * `Result<(), Error>` - The result of the stop operation.
+    ///
+    pub async fn stop_children(&mut self) -> Result<(), Error> {
+        self.supervision_handler.stop_children().await
+    }
+
+    /// Restarts all child actors of this actor.
+    /// 
+    /// # Returns
+    /// 
+    /// * `Result<(), Error>` - The result of the restart operation.
+    /// 
+    pub async fn restart_children(&mut self) -> Result<(), Error> {
+        self.supervision_handler.restart_children().await
+    }
+
    /// Sets the current error in the context.
     ///
     /// # Arguments
