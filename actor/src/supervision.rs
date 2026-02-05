@@ -1,5 +1,8 @@
 //! Supervision strategies
 //!
+//! Defines supervision strategies for handling actor startup failures,
+//! including retry mechanisms with customizable backoff strategies.
+//! 
 
 use std::{collections::VecDeque, fmt::Debug, time::Duration};
 
@@ -61,9 +64,7 @@ impl RetryStrategy for Strategy {
         match self {
             Strategy::NoInterval(strategy) => strategy.max_retries(),
             Strategy::FixedInterval(strategy) => strategy.max_retries(),
-            Strategy::CustomIntervalStrategy(strategy) => {
-                strategy.max_retries()
-            }
+            Strategy::CustomIntervalStrategy(strategy) => strategy.max_retries(),
         }
     }
 
@@ -71,9 +72,7 @@ impl RetryStrategy for Strategy {
         match self {
             Strategy::NoInterval(strategy) => strategy.next_backoff(),
             Strategy::FixedInterval(strategy) => strategy.next_backoff(),
-            Strategy::CustomIntervalStrategy(strategy) => {
-                strategy.next_backoff()
-            }
+            Strategy::CustomIntervalStrategy(strategy) => strategy.next_backoff(),
         }
     }
 }
@@ -243,8 +242,7 @@ mod tests {
 
     #[test]
     fn test_fixed_interval_strategy() {
-        let mut strategy =
-            FixedIntervalStrategy::new(3, Duration::from_secs(1));
+        let mut strategy = FixedIntervalStrategy::new(3, Duration::from_secs(1));
         assert_eq!(strategy.max_retries(), 3);
         assert_eq!(strategy.next_backoff(), Some(Duration::from_secs(1)));
     }
@@ -265,21 +263,18 @@ mod tests {
 
     #[test]
     fn test_strategy() {
-        let mut strategy = Strategy::FixedInterval(FixedIntervalStrategy::new(
-            2,
-            Duration::from_secs(5),
-        ));
+        let mut strategy =
+            Strategy::FixedInterval(FixedIntervalStrategy::new(2, Duration::from_secs(5)));
         assert_eq!(strategy.max_retries(), 2);
         assert_eq!(strategy.next_backoff(), Some(Duration::from_secs(5)));
         let mut strategy = Strategy::default();
         assert_eq!(strategy.max_retries(), 0);
         assert_eq!(strategy.next_backoff(), None);
-        let mut strategy = Strategy::CustomIntervalStrategy(
-            CustomIntervalStrategy::new(VecDeque::from([
+        let mut strategy =
+            Strategy::CustomIntervalStrategy(CustomIntervalStrategy::new(VecDeque::from([
                 Duration::from_secs(1),
                 Duration::from_secs(2),
-            ])),
-        );
+            ])));
         assert_eq!(strategy.max_retries(), 2);
         assert_eq!(strategy.next_backoff(), Some(Duration::from_secs(1)));
         assert_eq!(strategy.next_backoff(), Some(Duration::from_secs(2)));

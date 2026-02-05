@@ -1,14 +1,16 @@
-//
+//! # Actor Runner
+//!
+//! This module manages the lifecycle and execution of actors,
+//! including startup, restart, shutdown and supervision handling.
 
 use crate::{
     Actor, ActorContext, ActorPath, ActorRef, Error,
     handler::{HandlerHelper, MailboxReceiver, mailbox},
-    system::{
-        SupervisionHandler, ActorRegistry, 
-        action_channel, ChildAction, ActionSender, ActionReceiver,
-        signal_channel, SignalSender, SignalReceiver, ActorSignal,
-    },
     supervision::{RetryStrategy, SupervisionStrategy},
+    system::{
+        ActionReceiver, ActionSender, ActorRegistry, ActorSignal, ChildAction, SignalReceiver,
+        SignalSender, SupervisionHandler, action_channel, signal_channel,
+    },
 };
 
 use tokio::sync::{broadcast, oneshot};
@@ -60,8 +62,7 @@ where
             event_sender,
             signal_sender,
         );
-        let actor_ref =
-            ActorRef::new(actor_path.clone(), handler, event_receiver);
+        let actor_ref = ActorRef::new(actor_path.clone(), handler, event_receiver);
         let runner = Self {
             actor,
             actor_path,
@@ -74,10 +75,7 @@ where
         (runner, actor_ref, action_sender)
     }
 
-    pub async fn init(
-        &mut self,
-        mut init_sender: Option<oneshot::Sender<Result<(), Error>>>,
-    ) {
+    pub async fn init(&mut self, mut init_sender: Option<oneshot::Sender<Result<(), Error>>>) {
         debug!("Initializing actor {} runner.", &self.actor_path);
 
         // Main loop of the actor.
@@ -87,20 +85,12 @@ where
             match self.lifecycle {
                 ActorLifecycle::Created => {
                     debug!("Actor {} created.", &self.actor_path);
-                    if let Err(e) =
-                        self.actor.pre_start(&mut self.context).await
-                    {
-                        error!(
-                            "Actor {} pre_start failed: {:?}",
-                            &self.actor_path, e
-                        );
+                    if let Err(e) = self.actor.pre_start(&mut self.context).await {
+                        error!("Actor {} pre_start failed: {:?}", &self.actor_path, e);
                         self.context.set_current_error(e);
                         self.lifecycle = ActorLifecycle::Failed;
                     } else {
-                        debug!(
-                            "Actor {} pre_start succeeded.",
-                            &self.actor_path
-                        );
+                        debug!("Actor {} pre_start succeeded.", &self.actor_path);
                         self.lifecycle = ActorLifecycle::Started;
                     }
                 }
@@ -119,11 +109,8 @@ where
                 }
                 ActorLifecycle::Restarted => {
                     debug!("Actor {} restarted.", &self.actor_path);
-                    self.apply_supervision_strategy(
-                        A::supervision_strategy(),
-                        &mut retries,
-                    )
-                    .await;
+                    self.apply_supervision_strategy(A::supervision_strategy(), &mut retries)
+                        .await;
                 }
                 ActorLifecycle::Failed => {
                     error!("Actor {} failed.", &self.actor_path);
@@ -131,13 +118,8 @@ where
                 }
                 ActorLifecycle::Stopped => {
                     debug!("Actor {} stopped.", &self.actor_path);
-                    if let Err(e) =
-                        self.actor.post_stop(&mut self.context).await
-                    {
-                        error!(
-                            "Actor {} post_stop failed: {:?}",
-                            &self.actor_path, e
-                        );
+                    if let Err(e) = self.actor.post_stop(&mut self.context).await {
+                        error!("Actor {} post_stop failed: {:?}", &self.actor_path, e);
                     }
                     self.lifecycle = ActorLifecycle::Terminated;
                 }
@@ -147,8 +129,6 @@ where
                 }
             }
         }
-
-        unimplemented!()
     }
 
     /// Runs the actor, processing incoming messages and signals.
@@ -181,7 +161,7 @@ where
                         ChildAction::Stop => {
                             debug!("Actor {} received stop action.", &self.actor_path);
                             // Stop child actors first
-                            
+
                             return ActorLifecycle::Stopped;
                         },
                         ChildAction::Restart => {
@@ -269,10 +249,11 @@ mod tests {
 
     use super::*;
 
+    use crate::supervision::{FixedIntervalStrategy, Strategy};
+    use crate::{Actor, ActorContext, ActorPath, Error};
     use std::collections::HashMap;
     use std::sync::Arc;
     use tokio::sync::RwLock;
-    use crate::{Actor, ActorPath, ActorContext, Error};
 
     struct TestActor;
 
@@ -288,21 +269,19 @@ mod tests {
             _sender: &ActorPath,
             _msg: Self::Message,
         ) -> Result<Self::Response, Error> {
-            println!("Handling message: {}", _msg);
+            //println!("Handling message: {}", _msg);
             assert_eq!(_msg, "Hello, Actor!");
             Ok("ok".to_string())
         }
 
-        async fn pre_start(
-            &mut self,
-            _ctx: &mut ActorContext<Self>,
-        ) -> Result<(), Error> {
-            println!("Pre-start called");
+        async fn pre_start(&mut self, _ctx: &mut ActorContext<Self>) -> Result<(), Error> {
+            //println!("Pre-start called");
             Ok(())
         }
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_actor_runner_lifecycle() {
         let actor = TestActor;
         let actor_path = ActorPath::from("test_actor");
@@ -319,10 +298,77 @@ mod tests {
         let init_result = init_receiver.await.unwrap();
         assert!(init_result.is_ok());
         // Send a message to the actor.
-        actor_ref.tell(
-            "Hello, Actor!".to_string(),
-        ).await.unwrap();
+        actor_ref.tell("Hello, Actor!".to_string()).await.unwrap();
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     }
 
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_actor_retry_strategy() {
+        // Test that a retry strategy is configured correctly
+        let strategy = SupervisionStrategy::Retry(Strategy::FixedInterval(
+            FixedIntervalStrategy::new(3, std::time::Duration::from_millis(10)),
+        ));
+        
+        match strategy {
+            SupervisionStrategy::Retry(mut s) => {
+                assert_eq!(s.max_retries(), 3);
+                assert_eq!(s.next_backoff(), Some(std::time::Duration::from_millis(10)));
+            }
+            _ => panic!("Expected Retry strategy"),
+        }
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_actor_message_handling() {
+        let actor = TestActor;
+        let actor_path = ActorPath::from("msg_handler");
+        let registry: ActorRegistry = Arc::new(RwLock::new(HashMap::new()));
+        let (mut runner, actor_ref, _action_sender) =
+            ActorRunner::new(actor, actor_path, None, registry);
+
+        let (init_sender, init_receiver) = oneshot::channel();
+        tokio::spawn(async move {
+            runner.init(Some(init_sender)).await;
+        });
+
+        init_receiver.await.unwrap().unwrap();
+
+        // Test single message that TestActor expects
+        let response = actor_ref
+            .ask("Hello, Actor!".to_string())
+            .await
+            .unwrap();
+        assert_eq!(response, "ok".to_string());
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_actor_stop_action() {
+        let actor = TestActor;
+        let actor_path = ActorPath::from("stop_actor");
+        let registry: ActorRegistry = Arc::new(RwLock::new(HashMap::new()));
+        let (mut runner, _actor_ref, action_sender) =
+            ActorRunner::new(actor, actor_path, None, registry);
+
+        let (init_sender, init_receiver) = oneshot::channel();
+        let runner_handle = tokio::spawn(async move {
+            runner.init(Some(init_sender)).await;
+        });
+
+        init_receiver.await.unwrap().unwrap();
+
+        // Send stop action
+        action_sender.send(ChildAction::Stop).await.unwrap();
+
+        // Wait for runner to complete
+        tokio::time::timeout(
+            tokio::time::Duration::from_secs(1),
+            runner_handle,
+        )
+        .await
+        .expect("Runner should stop")
+        .unwrap();
+    }
 }

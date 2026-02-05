@@ -1,4 +1,7 @@
-//
+//! # Message Handler
+//!
+//! This module manages the sending and receiving of messages between actors,
+//! providing the mailbox and helpers for communication.
 
 use crate::{Actor, ActorContext, ActorPath, Error};
 use tokio::sync::{mpsc, oneshot};
@@ -51,9 +54,8 @@ impl<A: Actor> ActorMessage<A> {
         if let Some(resp) = self.resp
             && let Err(_e) = resp.send(result)
         {
-            error!("Failed to send response");
+            error!("Failed to send response back to sender");
         }
-        // ctx.should_stop()
     }
 }
 
@@ -121,11 +123,7 @@ impl<A: Actor> HandlerHelper<A> {
     ///
     /// Returns Error::Send if the actor's mailbox is closed or full.
     ///
-    pub(crate) async fn tell(
-        &self,
-        sender: ActorPath,
-        message: A::Message,
-    ) -> Result<(), Error> {
+    pub(crate) async fn tell(&self, sender: ActorPath, message: A::Message) -> Result<(), Error> {
         debug!("Telling message to actor from handle reference.");
         let msg = ActorMessage::new(sender, message, None);
         if let Err(error) = self.sender.send(msg).await {
@@ -184,8 +182,8 @@ impl<A: Actor> Clone for HandlerHelper<A> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Actor, ActorPath, Response, Message, Event};
-    use tokio::time::{sleep, Duration};
+    use crate::{Actor, ActorPath, Event, Message, Response};
+    use tokio::time::{Duration, sleep};
 
     struct TestActor;
 
@@ -212,6 +210,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_tell_and_ask() {
         let (sender, mut receiver) = mailbox::<TestActor>(10);
         let handler = HandlerHelper::new(sender);
@@ -246,5 +245,64 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response, "Received: World");
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_concurrent_messages() {
+        let (sender, mut receiver) = mailbox::<TestActor>(100);
+        let handler = HandlerHelper::new(sender);
+
+        // Spawn a task to process messages
+        tokio::spawn(async move {
+            let mut actor = TestActor;
+            let mut ctx = ActorContext::new(
+                ActorPath::from("test_actor"),
+                crate::system::SupervisionHandler::default(),
+                tokio::sync::broadcast::channel(100).0,
+                None,
+            );
+            while let Some(msg) = receiver.recv().await {
+                msg.handle(&mut actor, &mut ctx).await;
+            }
+        });
+
+        // Send multiple messages concurrently
+        let mut handles = vec![];
+        for i in 0..20 {
+            let handler_clone = handler.clone();
+            let handle = tokio::spawn(async move {
+                handler_clone
+                    .ask(ActorPath::from("sender"), format!("Message {}", i))
+                    .await
+            });
+            handles.push(handle);
+        }
+
+        // Wait for all responses
+        for (i, handle) in handles.into_iter().enumerate() {
+            let result = handle.await.unwrap();
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap(), format!("Received: Message {}", i));
+        }
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_handler_clone() {
+        let (sender, _receiver) = mailbox::<TestActor>(10);
+        let handler = HandlerHelper::new(sender);
+        let cloned = handler.clone();
+
+        // Both handlers should be able to send messages
+        let result1 = handler
+            .tell(ActorPath::from("sender"), "Test1".to_string())
+            .await;
+        let result2 = cloned
+            .tell(ActorPath::from("sender"), "Test2".to_string())
+            .await;
+
+        assert!(result1.is_ok());
+        assert!(result2.is_ok());
     }
 }

@@ -1,4 +1,6 @@
-//
+//! # Error Types
+//!
+//! Defines the error types that can occur in the actor system.
 
 use thiserror::Error;
 
@@ -16,7 +18,7 @@ pub enum Error {
     /// Error when handling a message fails.
     #[error("Failed to create actor: {0}")]
     CreateActor(String),
-    ///
+    /// Error when emitting an event fails.
     #[error("Sending event failed: {0}")]
     SendEvent(String),
     /// Supervision error.

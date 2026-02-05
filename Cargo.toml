@@ -21,6 +21,7 @@ bincode = {version = "2.0.1", features = ["serde"] }
 criterion = { version = "0.8.1" }
 crossbeam = "0.8.4"
 futures =  { version = "0.3.31", features = ["async-await"] }
+serial_test = "3.3.1"
 serde = { version = "1.0.219", features = ["derive"] }
 tempfile = "3.22.0"
 thiserror = { version = "2.0.16" }

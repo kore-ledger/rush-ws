@@ -10,9 +10,7 @@ use std::fmt::{Error, Formatter};
 
 /// Actor path. This is a path to an actor in the actor system.
 ///
-#[derive(
-    Clone, Hash, Eq, PartialEq, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ActorPath(Vec<String>);
 
 impl ActorPath {
@@ -55,7 +53,7 @@ impl ActorPath {
     /// Returns the key of the path.
     ///
     pub fn key(&self) -> String {
-        self.0.last().cloned().unwrap_or_else(|| "".to_string())
+        self.0.last().cloned().unwrap_or_default()
     }
 
     /// Returns the levels size of the path.
@@ -401,7 +399,7 @@ mod tests {
         let path = ActorPath::from(&s);
         assert_eq!(path.0, vec!["acme", "building", "room", "sensor"]);
     }
-    
+
     #[test]
     fn test_debug_format() {
         let path = ActorPath::from("/acme/building/room/sensor");

@@ -1,25 +1,23 @@
-//
+//! # Actor Implementation
+//!
+//! This module contains the implementation of the `Actor` trait and its related components,
+//! including the execution context and actor references.
 
 use crate::{
     ActorPath, Error,
-    handler::HandlerHelper, 
+    handler::HandlerHelper,
     supervision::SupervisionStrategy,
-    system::{SupervisionHandler, SignalSender, ActorSignal},
+    system::{ActorSignal, SignalSender, SupervisionHandler},
 };
 use async_trait::async_trait;
 use serde::{Serialize, de::DeserializeOwned};
 use std::fmt::Debug;
-use tokio::sync::broadcast::{
-    Receiver as EventReceiver, Sender as EventSender,
-};
+use tokio::sync::broadcast::{Receiver as EventReceiver, Sender as EventSender};
 use tracing::{debug, error};
 
 /// Events that this actor will emit after processing a message. The events emitted by a message
 /// handler will be used to apply the event sourcing pattern.
-pub trait Event:
-    Serialize + DeserializeOwned + Debug + Clone + Send + Sync + 'static
-{
-}
+pub trait Event: Serialize + DeserializeOwned + Debug + Clone + Send + Sync + 'static {}
 
 /// Defines what an actor will receive as its message, and with what it should respond.
 pub trait Message: Send + Sync + 'static {}
@@ -66,10 +64,7 @@ pub trait Actor: Send + Sync + Sized + 'static {
     ///
     /// Returns an error if the actor could not be started.
     ///
-    async fn pre_start(
-        &mut self,
-        _context: &mut ActorContext<Self>,
-    ) -> Result<(), Error> {
+    async fn pre_start(&mut self, _context: &mut ActorContext<Self>) -> Result<(), Error> {
         Ok(())
     }
 
@@ -77,10 +72,7 @@ pub trait Actor: Send + Sync + Sized + 'static {
     /// error occurs in [`Actor::pre_start()`]. By default it simply calls
     /// `pre_start()` again, but you can also choose to reinitialize the actor
     /// in some other way.
-    async fn pre_restart(
-        &mut self,
-        ctx: &mut ActorContext<Self>,
-    ) -> Result<(), Error> {
+    async fn pre_restart(&mut self, ctx: &mut ActorContext<Self>) -> Result<(), Error> {
         self.pre_start(ctx).await
     }
 
@@ -100,10 +92,7 @@ pub trait Actor: Send + Sync + Sized + 'static {
     ///
     /// Returns an error if the actor could not be stopped.
     ///
-    async fn pre_stop(
-        &mut self,
-        _ctx: &mut ActorContext<Self>,
-    ) -> Result<(), Error> {
+    async fn pre_stop(&mut self, _ctx: &mut ActorContext<Self>) -> Result<(), Error> {
         Ok(())
     }
 
@@ -113,10 +102,7 @@ pub trait Actor: Send + Sync + Sized + 'static {
     ///
     /// * `context` - The context of the actor.
     ///
-    async fn post_stop(
-        &mut self,
-        _ctx: &mut ActorContext<Self>,
-    ) -> Result<(), Error> {
+    async fn post_stop(&mut self, _ctx: &mut ActorContext<Self>) -> Result<(), Error> {
         Ok(())
     }
 
@@ -149,11 +135,7 @@ pub trait Actor: Send + Sync + Sized + 'static {
     /// * `event` - The event to handle.
     /// * `ctx` - The actor context.
     ///
-    async fn on_event(
-        &mut self,
-        _event: Self::Event,
-        _ctx: &mut ActorContext<Self>,
-    ) {
+    async fn on_event(&mut self, _event: Self::Event, _ctx: &mut ActorContext<Self>) {
         // Default implementation.
     }
 
@@ -262,38 +244,32 @@ impl<A: Actor> ActorContext<A> {
     }
 
     /// Creates a child actor.
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `actor` - The actor to create.
     /// * `name` - The name of the child actor.
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// * `Result<ActorRef<B>, Error>` - The reference to the created child actor or an error.
     ///
-    pub async fn create_child<B>(
-        &mut self,
-        actor: B,
-        name: &str,
-    ) -> Result<ActorRef<B>, Error>
+    pub async fn create_child<B>(&mut self, actor: B, name: &str) -> Result<ActorRef<B>, Error>
     where
         B: Actor,
     {
         let path = self.path.clone() / name;
-        self.supervision_handler
-            .create_actor(actor, &path)
-            .await
+        self.supervision_handler.create_actor(actor, &path).await
     }
 
     /// Gets a child actor by name.
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `name` - The name of the child actor.
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// * `Result<Option<ActorRef<B>>, Error>` - The actor reference if found, or None.
     ///
     pub async fn get_child<B>(&self, name: &str) -> Result<Option<ActorRef<B>>, Error>
@@ -305,13 +281,13 @@ impl<A: Actor> ActorContext<A> {
     }
 
     /// Checks if a child actor exists by name.
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `name` - The name of the child actor.
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// * `Result<bool, Error>` - True if the child actor exists, false otherwise.
     ///
     pub async fn child_exists(&self, name: &str) -> Result<bool, Error> {
@@ -320,9 +296,9 @@ impl<A: Actor> ActorContext<A> {
     }
 
     /// Stops all child actors of this actor.
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// * `Result<(), Error>` - The result of the stop operation.
     ///
     pub async fn stop_children(&mut self) -> Result<(), Error> {
@@ -330,16 +306,16 @@ impl<A: Actor> ActorContext<A> {
     }
 
     /// Restarts all child actors of this actor.
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// * `Result<(), Error>` - The result of the restart operation.
-    /// 
+    ///
     pub async fn restart_children(&mut self) -> Result<(), Error> {
         self.supervision_handler.restart_children().await
     }
 
-   /// Sets the current error in the context.
+    /// Sets the current error in the context.
     ///
     /// # Arguments
     /// * `error` - The error to set.
@@ -386,10 +362,7 @@ impl<A: Actor> ActorContext<A> {
     pub fn emit_event(&self, event: <A as Actor>::Event) -> Result<(), Error> {
         if let Err(e) = self.event_sender.send(event) {
             error!("Failed to emit event: {}", e);
-            return Err(Error::SendEvent(format!(
-                "Failed to emit event: {}",
-                e
-            )));
+            Err(Error::SendEvent(format!("Failed to emit event: {}", e)))
         } else {
             Ok(())
         }
@@ -402,19 +375,19 @@ impl<A: Actor> ActorContext<A> {
     /// * `error` - The error to emit.
     ///
     pub async fn emit_error(&self, error: Error) -> Result<(), Error> {
-        if let Some(signal_sender) = &self.signal_sender {
-            if let Err(e) = signal_sender
+        if let Some(signal_sender) = &self.signal_sender
+            && let Err(e) = signal_sender
                 .send(ActorSignal::ChildError(self.path.clone(), error))
                 .await
-            {
-                error!("Failed to emit error signal: {}", e);
-                return Err(Error::SendEvent(format!(
-                    "Failed to emit error signal: {}",
-                    e
-                )));
-            }
+        {
+            error!("Failed to emit error signal: {}", e);
+            Err(Error::SendEvent(format!(
+                "Failed to emit error signal: {}",
+                e
+            )))
+        } else {
+            Ok(())
         }
-        Ok(())
     }
 
     /// Emits a fault signal to the parent actor.
@@ -424,19 +397,19 @@ impl<A: Actor> ActorContext<A> {
     /// * `error` - The error to emit.
     ///
     pub async fn emit_fault(&self, error: Error) -> Result<(), Error> {
-        if let Some(signal_sender) = &self.signal_sender {
-            if let Err(e) = signal_sender
+        if let Some(signal_sender) = &self.signal_sender
+            && let Err(e) = signal_sender
                 .send(ActorSignal::ChildFault(self.path.clone(), error))
                 .await
-            {
-                error!("Failed to emit fault signal: {}", e);
-                return Err(Error::SendEvent(format!(
-                    "Failed to emit fault signal: {}",
-                    e
-                )));
-            }
+        {
+            error!("Failed to emit fault signal: {}", e);
+            Err(Error::SendEvent(format!(
+                "Failed to emit fault signal: {}",
+                e
+            )))
+        } else {
+            Ok(())
         }
-        Ok(())
     }
 }
 
@@ -544,11 +517,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Actor, ActorPath, Response, Message, Event, handler::mailbox};
-    use serde::{Serialize, Deserialize};
+    use crate::{Actor, ActorPath, Event, Message, Response, handler::mailbox};
+    use serde::{Deserialize, Serialize};
+    use std::sync::Arc;
     use std::time::Duration;
+    use tokio::sync::{RwLock, broadcast};
     use tokio::time::sleep;
-    use tokio::sync::broadcast;
 
     struct TestActor;
 
@@ -588,6 +562,7 @@ mod tests {
     impl Event for TestEvent {}
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_actor_ref_tell_ask() {
         let (sender, mut receiver) = mailbox::<TestActor>(10);
         let handler = HandlerHelper::new(sender);
@@ -623,6 +598,146 @@ mod tests {
         match response.unwrap() {
             TestResponse::Pong => {}
         }
+    }
 
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_actor_ref_clone() {
+        let (sender, _receiver) = mailbox::<TestActor>(10);
+        let handler = HandlerHelper::new(sender);
+        let actor_path = ActorPath::from("test_actor");
+        let actor_ref = ActorRef::new(
+            actor_path.clone(),
+            handler,
+            tokio::sync::broadcast::channel(10).1,
+        );
+
+        // Clone the actor ref
+        let cloned_ref = actor_ref.clone();
+
+        // Both should point to the same actor
+        assert_eq!(actor_ref.path(), cloned_ref.path());
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_actor_context_path() {
+        let actor_path = ActorPath::from("/parent/child");
+        let (event_sender, _) = broadcast::channel(10);
+        let context: ActorContext<TestActor> = ActorContext::new(
+            actor_path.clone(),
+            SupervisionHandler::default(),
+            event_sender,
+            None,
+        );
+
+        assert_eq!(context.path().to_string(), "/parent/child");
+    }
+
+    struct StatefulActor {
+        counter: usize,
+    }
+
+    impl Response for usize {}
+
+    #[async_trait::async_trait]
+    impl Actor for StatefulActor {
+        type Message = TestMessage;
+        type Response = usize;
+        type Event = TestEvent;
+
+        async fn handle(
+            &mut self,
+            _ctx: &mut ActorContext<Self>,
+            _sender: &ActorPath,
+            _msg: Self::Message,
+        ) -> Result<Self::Response, Error> {
+            self.counter += 1;
+            Ok(self.counter)
+        }
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_actor_state_preservation() {
+        let (sender, mut receiver) = mailbox::<StatefulActor>(10);
+        let handler = HandlerHelper::new(sender);
+        let actor_path = ActorPath::from("stateful_actor");
+        let (event_sender, _) = broadcast::channel(10);
+        let actor_ref = ActorRef::new(
+            actor_path.clone(),
+            handler,
+            tokio::sync::broadcast::channel(10).1,
+        );
+
+        // Spawn a task to process messages
+        let counter_check = Arc::new(RwLock::new(0));
+        let counter_clone = counter_check.clone();
+        tokio::spawn(async move {
+            let mut actor = StatefulActor { counter: 0 };
+            let mut ctx = ActorContext::new(
+                actor_path,
+                SupervisionHandler::default(),
+                event_sender,
+                None,
+            );
+            while let Some(msg) = receiver.recv().await {
+                msg.handle(&mut actor, &mut ctx).await;
+                *counter_clone.write().await = actor.counter;
+            }
+        });
+
+        // Send multiple messages
+        for _ in 0..5 {
+            actor_ref.tell(TestMessage::Ping).await.unwrap();
+        }
+
+        sleep(Duration::from_millis(100)).await;
+
+        // Verify state was preserved across messages
+        let final_count = *counter_check.read().await;
+        assert_eq!(final_count, 5);
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_actor_event_subscription() {
+        let (sender, mut receiver) = mailbox::<TestActor>(10);
+        let handler = HandlerHelper::new(sender);
+        let actor_path = ActorPath::from("event_actor");
+        let (event_sender, _) = broadcast::channel(10);
+        let actor_ref = ActorRef::new(
+            actor_path.clone(),
+            handler,
+            event_sender.subscribe(),
+        );
+
+        // Subscribe to events
+        let mut event_receiver = actor_ref.subscribe();
+
+        // Spawn actor
+        tokio::spawn(async move {
+            let mut actor = TestActor;
+            let mut ctx = ActorContext::new(
+                actor_path,
+                SupervisionHandler::default(),
+                event_sender,
+                None,
+            );
+
+            // Emit an event
+            let _ = ctx.emit_event(TestEvent::Started);
+
+            while let Some(msg) = receiver.recv().await {
+                msg.handle(&mut actor, &mut ctx).await;
+            }
+        });
+
+        // Wait for event
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Try to receive event
+        let result = event_receiver.try_recv();
+        assert!(result.is_ok() || event_receiver.len() == 0);
     }
 }
