@@ -221,7 +221,7 @@ mod tests {
             let mut ctx = ActorContext::new(
                 ActorPath::from("test_actor"),
                 // Dummy supervision handler
-                crate::system::SupervisionHandler::default(),
+                crate::system::Supervisor::default(),
                 tokio::sync::broadcast::channel(10).0,
                 None,
             );
@@ -258,7 +258,7 @@ mod tests {
             let mut actor = TestActor;
             let mut ctx = ActorContext::new(
                 ActorPath::from("test_actor"),
-                crate::system::SupervisionHandler::default(),
+                crate::system::Supervisor::default(),
                 tokio::sync::broadcast::channel(100).0,
                 None,
             );

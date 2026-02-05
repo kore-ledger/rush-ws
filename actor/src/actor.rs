@@ -7,7 +7,7 @@ use crate::{
     ActorPath, Error,
     handler::HandlerHelper,
     supervision::SupervisionStrategy,
-    system::{ActorSignal, SignalSender, SupervisionHandler},
+    system::{ActorSignal, SignalSender, Supervisor},
 };
 use async_trait::async_trait;
 use serde::{Serialize, de::DeserializeOwned};
@@ -203,7 +203,7 @@ pub struct ActorContext<A: Actor> {
     /// The path of the actor.
     path: ActorPath,
     /// The actor system reference.
-    supervision_handler: SupervisionHandler,
+    supervision_handler: Supervisor,
     /// Current error.
     current_error: Option<Error>,
     /// Event sender.
@@ -221,7 +221,7 @@ impl<A: Actor> ActorContext<A> {
     ///
     pub fn new(
         path: ActorPath,
-        supervision_handler: SupervisionHandler,
+        supervision_handler: Supervisor,
         event_sender: EventSender<<A as Actor>::Event>,
         signal_sender: Option<SignalSender>,
     ) -> Self {
@@ -570,7 +570,7 @@ mod tests {
         let (event_sender, _event_receiver) = broadcast::channel(10);
         let context = ActorContext::new(
             actor_path.clone(),
-            SupervisionHandler::default(),
+            Supervisor::default(),
             event_sender,
             None,
         );
@@ -626,7 +626,7 @@ mod tests {
         let (event_sender, _) = broadcast::channel(10);
         let context: ActorContext<TestActor> = ActorContext::new(
             actor_path.clone(),
-            SupervisionHandler::default(),
+            Supervisor::default(),
             event_sender,
             None,
         );
@@ -677,7 +677,7 @@ mod tests {
             let mut actor = StatefulActor { counter: 0 };
             let mut ctx = ActorContext::new(
                 actor_path,
-                SupervisionHandler::default(),
+                Supervisor::default(),
                 event_sender,
                 None,
             );
@@ -720,7 +720,7 @@ mod tests {
             let mut actor = TestActor;
             let mut ctx = ActorContext::new(
                 actor_path,
-                SupervisionHandler::default(),
+                Supervisor::default(),
                 event_sender,
                 None,
             );

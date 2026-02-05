@@ -1,68 +1,68 @@
-# Instrucciones de Codificación Rust para GitHub Copilot
+# Rust Coding Instructions for GitHub Copilot
 
-## Estilo y Convenciones
+## Style and Conventions
 
-- Usa nombres descriptivos en snake_case para variables y funciones
-- Usa CamelCase para tipos, structs, enums y traits
-- Usa SCREAMING_SNAKE_CASE para constantes
-- Prefiere expresiones sobre sentencias cuando sea posible
-- Usa `?` para propagación de errores en lugar de `unwrap()` o `expect()` cuando sea apropiado
+- Use descriptive names in snake_case for variables and functions
+- Use CamelCase for types, structs, enums, and traits
+- Use SCREAMING_SNAKE_CASE for constants
+- Prefer expressions over statements when possible
+- Use `?` for error propagation instead of `unwrap()` or `expect()` when appropriate
 
-## Gestión de Errores
+## Error Handling
 
-- Siempre maneja errores explícitamente, evita `unwrap()` en código de producción
-- Usa `Result<T, E>` para operaciones que pueden fallar
-- Usa `Option<T>` para valores opcionales
-- Implementa el trait `Error` para tipos de error personalizados
-- Considera usar `anyhow` o `thiserror` para manejo de errores más ergonómico
+- Always handle errors explicitly, avoid `unwrap()` in production code
+- Use `Result<T, E>` for operations that can fail
+- Use `Option<T>` for optional values
+- Implement the `Error` trait for custom error types
+- Consider using `anyhow` or `thiserror` for more ergonomic error handling
 
-## Ownership y Lifetimes
+## Ownership and Lifetimes
 
-- Prefiere referencias sobre clonación cuando sea posible
-- Usa `&str` en lugar de `String` para parámetros de funciones cuando solo se necesite lectura
-- Marca lifetimes explícitamente solo cuando el compilador no pueda inferirlos
-- Usa `Cow<str>` cuando necesites flexibilidad entre owned y borrowed
+- Prefer references over cloning when possible
+- Use `&str` instead of `String` for function parameters when only reading is needed
+- Mark lifetimes explicitly only when the compiler cannot infer them
+- Use `Cow<str>` when you need flexibility between owned and borrowed
 
-## Concurrencia
+## Concurrency
 
-- Usa `Arc` para compartir datos entre threads de forma segura
-- Usa `Mutex` o `RwLock` para sincronización
-- Prefiere canales (mpsc, tokio channels) para comunicación entre threads
-- Usa `async/await` con tokio o async-std para programación asíncrona
+- Use `Arc` to share data between threads safely
+- Use `Mutex` or `RwLock` for synchronization
+- Prefer channels (mpsc, tokio channels) for communication between threads
+- Use `async/await` with tokio or async-std for asynchronous programming
 
-## Documentación
+## Documentation
 
-- Documentación en inglés
-- Documenta todas las funciones públicas con comentarios `///`
-- Incluye ejemplos en la documentación cuando sea relevante
-- Documenta panics, errores y casos especiales
-- Usa `//!` para documentación a nivel de módulo
+- Documentation in English
+- Document all public functions with `///` comments
+- Include examples in documentation when relevant
+- Document panics, errors, and special cases
+- Use `//!` for module-level documentation
 
 ## Testing
 
-- Escribe tests unitarios en módulos `#[cfg(test)]`
-- Usa `assert!`, `assert_eq!` y `assert_ne!` apropiadamente
-- Nombra tests descriptivamente: `test_nombre_funcionalidad_caso_especifico`
-- Considera tests de integración en el directorio `tests/`
+- Write unit tests in `#[cfg(test)]` modules
+- Use `assert!`, `assert_eq!`, and `assert_ne!` appropriately
+- Name tests descriptively: `test_function_name_specific_case`
+- Consider integration tests in the `tests/` directory
 
 ## Performance
 
-- Usa iteradores en lugar de loops cuando sea posible
-- Evita clonaciones innecesarias
-- Considera `Vec::with_capacity()` cuando conozcas el tamaño anticipadamente
-- Usa `&[T]` en lugar de `&Vec<T>` para parámetros de función
+- Use iterators instead of loops when possible
+- Avoid unnecessary cloning
+- Consider `Vec::with_capacity()` when you know the size in advance
+- Use `&[T]` instead of `&Vec<T>` for function parameters
 
-## Patrones Comunes
+## Common Patterns
 
-- Usa pattern matching exhaustivo con `match`
-- Prefiere `if let` y `while let` para matching simple
-- Usa el operador `?` para propagación de errores
-- Implementa `From` y `Into` para conversiones de tipos
-- Usa `derive` para traits comunes (Debug, Clone, etc.)
+- Use exhaustive pattern matching with `match`
+- Prefer `if let` and `while let` for simple matching
+- Use the `?` operator for error propagation
+- Implement `From` and `Into` for type conversions
+- Use `derive` for common traits (Debug, Clone, etc.)
 
-## Seguridad
+## Safety
 
-- Minimiza el uso de `unsafe`
-- Documenta claramente los bloques `unsafe` y sus invariantes
-- Valida inputs en funciones públicas
-- Ten cuidado con integer overflow en modo release
+- Minimize the use of `unsafe`
+- Clearly document `unsafe` blocks and their invariants
+- Validate inputs in public functions
+- Be careful with integer overflow in release mode

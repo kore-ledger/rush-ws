@@ -65,12 +65,13 @@ pub fn signal_channel(buffer: usize) -> (SignalSender, SignalReceiver) {
     mpsc::channel(buffer)
 }
 
+
 /// The actor system responsible for managing actors and supervision.
 ///
 #[derive(Clone)]
 pub struct System {
     root_path: ActorPath,
-    system_handler: SupervisionHandler,
+    system_handler: Supervisor,
 }
 
 impl System {
@@ -87,7 +88,7 @@ impl System {
     pub fn new(cancellation_token: CancellationToken) -> Self {
         let registry: ActorRegistry = Arc::new(RwLock::new(HashMap::new()));
         let (child_signal_sender, child_signal_receiver) = signal_channel(10);
-        let system_handler = SupervisionHandler::new(registry, child_signal_sender);
+        let system_handler = Supervisor::new(registry, child_signal_sender);
         let root_path = ActorPath::from("/user");
         let system = System {
             system_handler,
@@ -96,6 +97,7 @@ impl System {
         let system_runner =
             SystemRunner::new(system.clone(), child_signal_receiver, cancellation_token);
         system_runner.run();
+        debug!("Actor system created with root path: {:?}", root_path);
         system
     }
 
@@ -164,13 +166,14 @@ impl System {
 
     /// Stops all child actors under the system's supervision.
     ///
-    pub async fn stop(&mut self) -> Result<(), Error> {
+    pub async fn stop_children(&mut self) -> Result<(), Error> {
+        debug!("System stopped all actors.");
         self.system_handler.stop_children().await
     }
 
     /// Restarts all child actors under the system's supervision.
     ///
-    pub async fn restart(&mut self) -> Result<(), Error> {
+    pub async fn restart_children(&mut self) -> Result<(), Error> {
         self.system_handler.restart_children().await
     }
 }
@@ -197,13 +200,14 @@ impl SystemRunner {
     }
 
     pub fn run(mut self) {
+        debug!("SystemRunner started for actor system with root path: {:?}", self.system.root_path);
         let mut receiver = self.signal_receiver;
         // Spawn a task to handle system-level signals
         tokio::spawn(async move {
             tokio::select! {
                 _ = self.cancellation_token.cancelled() => {
                     debug!("SystemRunner received cancellation signal, shutting down.");
-                    let _ = self.system.stop().await;
+                    let _ = self.system.stop_children().await;
                 }
                 Some(signal) = receiver.recv() => {
                     debug!("SystemRunner received signal.");
@@ -230,7 +234,7 @@ pub type ActionSendersRegistry = Arc<RwLock<HashMap<ActorPath, ActionSender>>>;
 /// Supervision handler for managing child actors.
 ///
 #[derive(Clone)]
-pub struct SupervisionHandler {
+pub struct Supervisor {
     /// The actor registry for managing child actors.
     registry: ActorRegistry,
     /// The action senders registry for managing child actors.
@@ -239,7 +243,7 @@ pub struct SupervisionHandler {
     child_signal_sender: SignalSender,
 }
 
-impl SupervisionHandler {
+impl Supervisor {
     /// Creates a new supervision handler.
     ///
     /// # Arguments
@@ -249,7 +253,7 @@ impl SupervisionHandler {
     ///
     /// # Returns
     ///
-    /// * `SupervisionHandler` - The newly created supervision handler.
+    /// * `Supervisor` - The newly created supervision handler.
     ///
     pub fn new(registry: ActorRegistry, child_signal_sender: SignalSender) -> Self {
         Self {
@@ -462,21 +466,75 @@ impl SupervisionHandler {
     }
 }
 
-impl Default for SupervisionHandler {
+impl Default for Supervisor {
     fn default() -> Self {
         let registry: ActorRegistry = Arc::new(RwLock::new(HashMap::new()));
         let (child_signal_sender, _child_signal_receiver) = signal_channel(10);
-        SupervisionHandler::new(registry, child_signal_sender)
+        Supervisor::new(registry, child_signal_sender)
     }
 }
 
 #[cfg(test)]
 mod tests {
-/* 
+ 
     use super::*;
     use crate::{Actor, ActorContext, Error};
     use tracing_test::traced_test;
 
+     struct TestActor;
+
+    #[async_trait::async_trait]
+    impl Actor for TestActor {
+        type Message = String;
+        type Response = String;
+        type Event = ();
+
+        async fn handle(
+            &mut self,
+            _ctx: &mut ActorContext<Self>,
+            _sender: &ActorPath,
+            msg: Self::Message,
+        ) -> Result<Self::Response, Error> {
+            Ok(format!("Received: {}", msg))
+        }
+
+        async fn pre_start(&mut self, _ctx: &mut ActorContext<Self>) -> Result<(), Error> {
+            //ctx.create_child(TestActor, "child").await?;
+            /*if ctx.child_exists("child").await? {
+                let child_ref = ctx.get_child::<TestActor>("child").await?;
+                assert!(child_ref.is_some());
+            }*/
+            Ok(())
+        }
+    }
+
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_system_creation() {
+        let token = CancellationToken::new();
+        let mut system = System::new(token.clone());
+        assert!(logs_contain("SystemRunner started for actor system with root path: /user"));
+        assert!(logs_contain("Actor system created with root path: /user"));
+
+        // Create an actor.
+        let actor_ref = system
+            .create_actor(TestActor, "test_actor")
+            .await
+            .expect("Failed to create actor");
+        assert_eq!(actor_ref.path().to_string(), "/user/test_actor");
+        assert!(logs_contain("Creating new handle reference."));
+        assert!(logs_contain("Initializing actor /user/test_actor runner."));
+        assert!(logs_contain("Child actor '/user/test_actor' created successfully."));
+
+        // Stop the system and verify shutdown logs
+        token.cancel();
+        
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Wait for shutdown logs
+    }
+
+
+/* 
     struct TestActor;
 
     #[async_trait::async_trait]

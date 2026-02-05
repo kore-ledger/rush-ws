@@ -9,7 +9,7 @@ use crate::{
     supervision::{RetryStrategy, SupervisionStrategy},
     system::{
         ActionReceiver, ActionSender, ActorRegistry, ActorSignal, ChildAction, SignalReceiver,
-        SignalSender, SupervisionHandler, action_channel, signal_channel,
+        SignalSender, Supervisor, action_channel, signal_channel,
     },
 };
 
@@ -55,7 +55,7 @@ where
         let handler = HandlerHelper::new(sender);
         let (child_signal_sender, signal_receiver) = signal_channel(100000);
         let (action_sender, action_receiver) = action_channel(10000);
-        let system_handler = SupervisionHandler::new(registry, child_signal_sender.clone());
+        let system_handler = Supervisor::new(registry, child_signal_sender.clone());
         let context = ActorContext::new(
             actor_path.clone(),
             system_handler,
