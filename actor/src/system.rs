@@ -65,7 +65,6 @@ pub fn signal_channel(buffer: usize) -> (SignalSender, SignalReceiver) {
     mpsc::channel(buffer)
 }
 
-
 /// The actor system responsible for managing actors and supervision.
 ///
 #[derive(Clone)]
@@ -138,6 +137,21 @@ impl System {
         self.system_handler.get_actor(&child_path).await
     }
 
+    /// Checks if a child actor exists by name.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The name of the  actor to check.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<bool, Error>` - True if the child exists, false otherwise.
+    ///
+    pub async fn actor_exists(&self, name: &str) -> Result<bool, Error> {
+        let child_path = self.root_path.clone() / name;
+        self.system_handler.child_exists(&child_path).await
+    }
+
     /// Handles a child actor error signal.
     ///     
     /// # Arguments
@@ -200,7 +214,10 @@ impl SystemRunner {
     }
 
     pub fn run(mut self) {
-        debug!("SystemRunner started for actor system with root path: {:?}", self.system.root_path);
+        debug!(
+            "SystemRunner started for actor system with root path: {:?}",
+            self.system.root_path
+        );
         let mut receiver = self.signal_receiver;
         // Spawn a task to handle system-level signals
         tokio::spawn(async move {
@@ -298,43 +315,32 @@ impl Supervisor {
             self.registry.clone(),
         );
 
+        // Insert the actor reference into the registry before initialization 
+        // to allow for recursive actor creation
+        self.registry
+            .write()
+            .await
+            .insert(path.clone(), Box::new(actor_ref.clone()));
+
+
         // Init the actor
         let (init_sender, init_receiver) = oneshot::channel();
         tokio::spawn(async move {
             runner.init(Some(init_sender)).await;
         });
-        match init_receiver.await {
-            Ok(Ok(())) => {
-                debug!("Child actor '{}' created successfully.", path);
-                // Insert the child into supervision
-                self.action_senders
-                    .write()
-                    .await
-                    .insert(path.clone(), action_sender);
-                self.registry
-                    .write()
-                    .await
-                    .insert(path.clone(), Box::new(actor_ref.clone()));
-                Ok(actor_ref)
-            }
-            Ok(Err(e)) => {
-                error!("Failed to initialize child actor '{}': {:?}", path, e);
-                Err(Error::Supervision(format!(
-                    "Failed to initialize child actor '{}': {:?}",
-                    path, e
-                )))
-            }
-            Err(e) => {
-                error!(
-                    "Initialization channel error for child actor '{}': {:?}",
-                    path, e
-                );
-                Err(Error::Supervision(format!(
-                    "Initialization channel error for child actor '{}': {:?}",
-                    path, e
-                )))
-            }
-        }
+        
+        // Wait for initialization to complete
+        let _ = init_receiver
+            .await
+            .expect("Failed creating actor. Initialization channel closed unexpectedly.");
+
+        // Insert the child into supervision
+        self.action_senders
+            .write()
+            .await
+            .insert(path.clone(), action_sender);
+        debug!("Actor '{}' created successfully.", path);
+        Ok(actor_ref)
     }
 
     /// Retrieves a child actor by name.
@@ -476,12 +482,12 @@ impl Default for Supervisor {
 
 #[cfg(test)]
 mod tests {
- 
+
     use super::*;
     use crate::{Actor, ActorContext, Error};
     use tracing_test::traced_test;
 
-     struct TestActor;
+    struct TestActor;
 
     #[async_trait::async_trait]
     impl Actor for TestActor {
@@ -498,43 +504,80 @@ mod tests {
             Ok(format!("Received: {}", msg))
         }
 
-        async fn pre_start(&mut self, _ctx: &mut ActorContext<Self>) -> Result<(), Error> {
-            //ctx.create_child(TestActor, "child").await?;
-            /*if ctx.child_exists("child").await? {
-                let child_ref = ctx.get_child::<TestActor>("child").await?;
-                assert!(child_ref.is_some());
-            }*/
+        async fn pre_start(&mut self, ctx: &mut ActorContext<Self>) -> Result<(), Error> {
+            debug!("TestActor pre_start called.");
+            let result = ctx.create_child(TestChild, "child").await;
+            assert!(result.is_ok());
             Ok(())
+        }
+    }
+
+    struct TestChild;
+
+    #[async_trait::async_trait]
+    impl Actor for TestChild {
+        type Message = String;
+        type Response = String;
+        type Event = ();
+
+        async fn handle(
+            &mut self,
+            _ctx: &mut ActorContext<Self>,
+            _sender: &ActorPath,
+            msg: Self::Message,
+        ) -> Result<Self::Response, Error> {
+            Ok(format!("Child received: {}", msg))
         }
     }
 
 
     #[tokio::test]
     #[traced_test]
-    async fn test_system_creation() {
+    async fn test_system() {
         let token = CancellationToken::new();
         let mut system = System::new(token.clone());
-        assert!(logs_contain("SystemRunner started for actor system with root path: /user"));
+        assert!(logs_contain(
+            "SystemRunner started for actor system with root path: /user"
+        ));
         assert!(logs_contain("Actor system created with root path: /user"));
 
         // Create an actor.
-        let actor_ref = system
-            .create_actor(TestActor, "test_actor")
-            .await
-            .expect("Failed to create actor");
+        let actor_ref = system.create_actor(TestActor, "test_actor").await;
+        assert!(actor_ref.is_ok());
+        let actor_ref = actor_ref.unwrap();
         assert_eq!(actor_ref.path().to_string(), "/user/test_actor");
         assert!(logs_contain("Creating new handle reference."));
         assert!(logs_contain("Initializing actor /user/test_actor runner."));
-        assert!(logs_contain("Child actor '/user/test_actor' created successfully."));
+        assert!(logs_contain("TestActor pre_start called."));
+        assert!(logs_contain(
+            "Actor '/user/test_actor' created successfully."
+        ));
+
+        // Test exists
+        let exists_result = system.actor_exists("test_actor").await;
+        assert!(exists_result.is_ok());
+        assert!(exists_result.unwrap());
+
+        // Create an actor with the same name and verify error
+        let duplicate_result = system.create_actor(TestActor, "test_actor").await;
+        assert!(duplicate_result.is_err());
+
+        // Retrieve the actor.
+        let retrieved_ref: Option<ActorRef<TestActor>> = system
+            .get_actor("test_actor")
+            .await
+            .expect("Failed to get actor");
+        assert!(retrieved_ref.is_some());
+        let retrieved_ref = retrieved_ref.unwrap();
+        assert_eq!(&retrieved_ref.path().to_string(), "/user/test_actor");
 
         // Stop the system and verify shutdown logs
         token.cancel();
-        
+
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Wait for shutdown logs
     }
 
-
-/* 
+    /*
     struct TestActor;
 
     #[async_trait::async_trait]
@@ -596,12 +639,12 @@ mod tests {
             .await
             .expect("Failed to create actor");
         assert_eq!(actor_ref.path().to_string(), "/user/test_actor");
-        
+
         // Try creating an actor with the same name
         let duplicate_result = system.create_actor(TestActor, "test_actor").await;
         assert!(duplicate_result.is_err());
 
-        
+
         // Retrieve the created actor
         let retrieved_ref: Option<ActorRef<TestActor>> = system
             .get_actor("test_actor")
@@ -614,7 +657,7 @@ mod tests {
         // Stop the created actor
         let stop_result = system.stop().await;
         assert!(stop_result.is_ok());
-        
+
         token.cancel();
         println!("System actor test completed.");
     }

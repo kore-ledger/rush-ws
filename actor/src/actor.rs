@@ -675,12 +675,7 @@ mod tests {
         let counter_clone = counter_check.clone();
         tokio::spawn(async move {
             let mut actor = StatefulActor { counter: 0 };
-            let mut ctx = ActorContext::new(
-                actor_path,
-                Supervisor::default(),
-                event_sender,
-                None,
-            );
+            let mut ctx = ActorContext::new(actor_path, Supervisor::default(), event_sender, None);
             while let Some(msg) = receiver.recv().await {
                 msg.handle(&mut actor, &mut ctx).await;
                 *counter_clone.write().await = actor.counter;
@@ -706,11 +701,7 @@ mod tests {
         let handler = HandlerHelper::new(sender);
         let actor_path = ActorPath::from("event_actor");
         let (event_sender, _) = broadcast::channel(10);
-        let actor_ref = ActorRef::new(
-            actor_path.clone(),
-            handler,
-            event_sender.subscribe(),
-        );
+        let actor_ref = ActorRef::new(actor_path.clone(), handler, event_sender.subscribe());
 
         // Subscribe to events
         let mut event_receiver = actor_ref.subscribe();
@@ -718,12 +709,7 @@ mod tests {
         // Spawn actor
         tokio::spawn(async move {
             let mut actor = TestActor;
-            let mut ctx = ActorContext::new(
-                actor_path,
-                Supervisor::default(),
-                event_sender,
-                None,
-            );
+            let mut ctx = ActorContext::new(actor_path, Supervisor::default(), event_sender, None);
 
             // Emit an event
             let _ = ctx.emit_event(TestEvent::Started);

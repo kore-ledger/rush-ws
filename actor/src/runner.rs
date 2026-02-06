@@ -139,10 +139,12 @@ where
         debug!("Running actor {}.", &self.actor_path);
         loop {
             tokio::select! {
+                // Handle incoming messages.
                 Some(message) = self.receiver.recv() => {
                     // Handle incoming messages.
                     message.handle(&mut self.actor, &mut self.context).await;
                 }
+                // Handle incoming signals from child actors.
                 Some(signal) = self.signal_receiver.recv() => {
                     // Handle incoming signals.
                     match signal {
@@ -156,18 +158,35 @@ where
                         }
                     }
                 }
+                // Handle child actions (stop/restart) sent by the supervisor.
                 Some(action) = self.action_receiver.recv() => {
                     match action {
                         ChildAction::Stop => {
                             debug!("Actor {} received stop action.", &self.actor_path);
                             // Stop child actors first
-
+                            if let Err(e) = self.context.stop_children().await {
+                                error!("Failed to stop child actors of {}: {:?}", &self.actor_path, e);
+                                if let Err(e) = self.context.emit_fault(e).await {
+                                    error!("Failed to emit fault for {}: {:?}", &self.actor_path, e);
+                                    self.context.set_current_error(e);
+                                    return ActorLifecycle::Failed;
+                                }
+                            }
                             return ActorLifecycle::Stopped;
                         },
                         ChildAction::Restart => {
                             debug!("Actor {} received restart action.", &self.actor_path);
+                            // Restart child actors first
+                            if let Err(e) = self.context.restart_children().await {
+                                error!("Failed to restart child actors of {}: {:?}", &self.actor_path, e);
+                                if let Err(e) = self.context.emit_fault(e).await {
+                                    error!("Failed to emit fault for {}: {:?}", &self.actor_path, e);
+                                    self.context.set_current_error(e);
+                                    return ActorLifecycle::Failed;
+                                }
+                            }
                             return ActorLifecycle::Restarted;
-                        }
+                        },
                     }
                 }
                 else => {
@@ -309,7 +328,7 @@ mod tests {
         let strategy = SupervisionStrategy::Retry(Strategy::FixedInterval(
             FixedIntervalStrategy::new(3, std::time::Duration::from_millis(10)),
         ));
-        
+
         match strategy {
             SupervisionStrategy::Retry(mut s) => {
                 assert_eq!(s.max_retries(), 3);
@@ -336,10 +355,7 @@ mod tests {
         init_receiver.await.unwrap().unwrap();
 
         // Test single message that TestActor expects
-        let response = actor_ref
-            .ask("Hello, Actor!".to_string())
-            .await
-            .unwrap();
+        let response = actor_ref.ask("Hello, Actor!".to_string()).await.unwrap();
         assert_eq!(response, "ok".to_string());
     }
 
@@ -363,12 +379,9 @@ mod tests {
         action_sender.send(ChildAction::Stop).await.unwrap();
 
         // Wait for runner to complete
-        tokio::time::timeout(
-            tokio::time::Duration::from_secs(1),
-            runner_handle,
-        )
-        .await
-        .expect("Runner should stop")
-        .unwrap();
+        tokio::time::timeout(tokio::time::Duration::from_secs(1), runner_handle)
+            .await
+            .expect("Runner should stop")
+            .unwrap();
     }
 }

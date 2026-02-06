@@ -2,7 +2,7 @@
 //!
 //! Defines supervision strategies for handling actor startup failures,
 //! including retry mechanisms with customizable backoff strategies.
-//! 
+//!
 
 use std::{collections::VecDeque, fmt::Debug, time::Duration};
 
