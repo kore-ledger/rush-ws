@@ -3,15 +3,13 @@
 //! The `path` module provides the `ActorPath` type. The `ActorPath` type is a path to an actor in the actor system.
 //!
 
-use serde::{Deserialize, Serialize};
-
-use std::cmp::Ordering;
+use std::{cmp::Ordering, sync::Arc};
 use std::fmt::{Error, Formatter};
 
 /// Actor path. This is a path to an actor in the actor system.
 ///
-#[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct ActorPath(Vec<String>);
+#[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Ord)]
+pub struct ActorPath(Arc<[String]>);
 
 impl ActorPath {
     /// Returns the root of the path.
@@ -26,7 +24,7 @@ impl ActorPath {
         } else if !self.0.is_empty() {
             ActorPath(self.0.iter().take(1).cloned().collect())
         } else {
-            ActorPath(Vec::new())
+            ActorPath(Arc::new([]))
         }
     }
 
@@ -38,11 +36,11 @@ impl ActorPath {
     ///
     pub fn parent(&self) -> Self {
         if self.0.len() > 1 {
-            let mut tokens = self.0.clone();
+            let mut tokens = (*self.0).to_vec();
             tokens.truncate(tokens.len() - 1);
-            ActorPath(tokens)
+            ActorPath(Arc::from(tokens))    
         } else {
-            ActorPath(Vec::new())
+            ActorPath(Arc::new([]))
         }
     }
 
@@ -82,9 +80,9 @@ impl ActorPath {
         } else if level == self.level() - 1 {
             self.parent()
         } else {
-            let mut tokens = self.0.clone();
+            let mut tokens = (*self.0).to_vec();
             tokens.truncate(level);
-            ActorPath(tokens)
+            ActorPath(Arc::from(tokens))
         }
     }
 
@@ -174,7 +172,7 @@ impl From<&str> for ActorPath {
             .filter(|x| !x.trim().is_empty())
             .map(|s| s.to_string())
             .collect();
-        ActorPath(tokens)
+        ActorPath(Arc::from(tokens))
     }
 }
 
@@ -195,7 +193,7 @@ impl std::ops::Div<&str> for ActorPath {
     type Output = ActorPath;
 
     fn div(self, rhs: &str) -> Self::Output {
-        let mut keys = self.0;
+        let mut keys = (*self.0).to_vec();
         let mut tokens: Vec<String> = rhs
             .split('/')
             .filter(|x| !x.trim().is_empty())
@@ -203,7 +201,7 @@ impl std::ops::Div<&str> for ActorPath {
             .collect();
 
         keys.append(&mut tokens);
-        ActorPath(keys)
+        ActorPath(Arc::from(keys))
     }
 }
 
@@ -230,63 +228,62 @@ impl std::fmt::Debug for ActorPath {
 #[cfg(test)]
 mod tests {
 
-    use std::vec;
-
     use super::*;
 
     #[test]
     fn parse_empty_string() {
         let path = ActorPath::from("");
-        assert_eq!(path.0, Vec::<String>::new());
+        assert_eq!(path.0, Arc::from([]));
     }
 
     #[test]
     fn parse_single_root() {
         let path = ActorPath::from("/acme");
-        println!("{:?}", path);
-        assert_eq!(path.0, vec!["acme"]);
+        assert_eq!(path.0, Arc::from(["acme".to_owned()]));
     }
 
     #[test]
     fn parse_two_deep() {
         let path = ActorPath::from("/acme/building");
-        println!("{:?}", path);
-        assert_eq!(path.0, vec!["acme", "building"]);
+        assert_eq!(path.0, Arc::from(["acme".to_owned(), "building".to_owned()]));
     }
 
     #[test]
     fn parse_three_deep() {
         let path = ActorPath::from("/acme/building/room");
-        println!("{:?}", path);
-        assert_eq!(path.0, vec!["acme", "building", "room"]);
+        assert_eq!(path.0, Arc::from(
+            ["acme".to_owned(), 
+            "building".to_owned(), 
+            "room".to_owned()
+            ]));
     }
 
     #[test]
     fn parse_levels() {
         let path = ActorPath::from("/acme/building/room/sensor");
-        println!("{:?}", path);
         assert_eq!(path.level(), 4);
     }
 
     #[test]
     fn test_get_key() {
         let path = ActorPath::from("/acme/building/room/sensor");
-        println!("{:?}", path);
         assert_eq!(path.key(), "sensor".to_string());
     }
 
     #[test]
     fn parse_get_parent() {
         let path = ActorPath::from("/acme/building/room/sensor").parent();
-        println!("{:?}", path);
-        assert_eq!(path.parent().0, vec!["acme", "building"]);
+        assert_eq!(path.0, Arc::from([
+            "acme".to_owned(), 
+            "building".to_owned(), 
+            "room".to_owned(),
+        ]));
     }
 
     #[test]
     fn parse_to_string() {
         let path = ActorPath::from("/acme/building/room/sensor");
         let string = path.to_string();
-        println!("{:?}", string);
         assert_eq!(string, "/acme/building/room/sensor");
     }
 
@@ -294,7 +291,6 @@ mod tests {
     fn parse_root_at_root() {
         let path = ActorPath::from("/acme");
         let string = path.root().to_string();
-        println!("{:?}", string);
         assert_eq!(string, "/acme");
     }
 
@@ -302,7 +298,6 @@ mod tests {
     fn parse_parent_at_root() {
         let path = ActorPath::from("/acme");
         let string = path.parent().to_string();
-        println!("{:?}", string);
         assert_eq!(string, "/");
     }
 
@@ -310,7 +305,6 @@ mod tests {
     fn parse_root_to_string() {
         let path = ActorPath::from("/acme/building/room/sensor");
         let string = path.root().to_string();
-        println!("{:?}", string);
         assert_eq!(string, "/acme");
     }
 
@@ -360,7 +354,7 @@ mod tests {
         let root = path.root();
         assert!(root.is_top_level());
         assert!(!path.is_top_level());
-        let path = ActorPath(vec![]);
+        let path = ActorPath(Arc::new([]));
         assert!(!path.is_top_level());
         let root = path.root();
         assert!(!root.is_top_level());
@@ -394,10 +388,20 @@ mod tests {
     fn test_from_string() {
         let s = String::from("/acme/building/room/sensor");
         let path = ActorPath::from(s);
-        assert_eq!(path.0, vec!["acme", "building", "room", "sensor"]);
+        assert_eq!(path.0, Arc::from([
+            "acme".to_owned(), 
+            "building".to_owned(), 
+            "room".to_owned(), 
+            "sensor".to_owned()
+        ]));
         let s = String::from("/acme/building/room/sensor/");
         let path = ActorPath::from(&s);
-        assert_eq!(path.0, vec!["acme", "building", "room", "sensor"]);
+        assert_eq!(path.0, Arc::from([
+            "acme".to_owned(), 
+            "building".to_owned(), 
+            "room".to_owned(), 
+            "sensor".to_owned()
+        ]));
     }
 
     #[test]

@@ -9,7 +9,7 @@ use crate::{
     supervision::{RetryStrategy, SupervisionStrategy},
     system::{
         ActionReceiver, ActionSender, ActorRegistry, ActorSignal, ChildAction, SignalReceiver,
-        SignalSender, Supervisor, action_channel, signal_channel,
+        SignalSender, Supervisor, Config, action_channel, signal_channel,
     },
 };
 
@@ -49,18 +49,20 @@ where
         actor_path: ActorPath,
         signal_sender: Option<SignalSender>,
         registry: ActorRegistry,
+        conf: &Config,
     ) -> (Self, ActorRef<A>, ActionSender) {
-        let (sender, receiver) = mailbox::<A>(10000);
-        let (event_sender, event_receiver) = broadcast::channel(10000);
+        let (sender, receiver) = mailbox::<A>(conf.mailbox_size);
+        let (event_sender, event_receiver) = broadcast::channel(conf.mailbox_size);
         let handler = HandlerHelper::new(sender);
-        let (child_signal_sender, signal_receiver) = signal_channel(100000);
-        let (action_sender, action_receiver) = action_channel(10000);
+        let (child_signal_sender, signal_receiver) = signal_channel(conf.signal_buffer_size);
+        let (action_sender, action_receiver) = action_channel(conf.action_buffer_size);
         let system_handler = Supervisor::new(registry, child_signal_sender.clone());
         let context = ActorContext::new(
             actor_path.clone(),
             system_handler,
             event_sender,
             signal_sender,
+            conf,
         );
         let actor_ref = ActorRef::new(actor_path.clone(), handler, event_receiver);
         let runner = Self {
@@ -87,7 +89,6 @@ where
                     debug!("Actor {} created.", &self.actor_path);
                     if let Err(e) = self.actor.pre_start(&mut self.context).await {
                         error!("Actor {} pre_start failed: {:?}", &self.actor_path, e);
-                        self.context.set_current_error(e);
                         self.lifecycle = ActorLifecycle::Failed;
                     } else {
                         debug!("Actor {} pre_start succeeded.", &self.actor_path);
@@ -166,9 +167,8 @@ where
                             // Stop child actors first
                             if let Err(e) = self.context.stop_children().await {
                                 error!("Failed to stop child actors of {}: {:?}", &self.actor_path, e);
-                                if let Err(e) = self.context.emit_fault(e).await {
+                                if let Err(e) = self.context.emit_fault(&e).await {
                                     error!("Failed to emit fault for {}: {:?}", &self.actor_path, e);
-                                    self.context.set_current_error(e);
                                     return ActorLifecycle::Failed;
                                 }
                             }
@@ -179,9 +179,8 @@ where
                             // Restart child actors first
                             if let Err(e) = self.context.restart_children().await {
                                 error!("Failed to restart child actors of {}: {:?}", &self.actor_path, e);
-                                if let Err(e) = self.context.emit_fault(e).await {
+                                if let Err(e) = self.context.emit_fault(&e).await {
                                     error!("Failed to emit fault for {}: {:?}", &self.actor_path, e);
-                                    self.context.set_current_error(e);
                                     return ActorLifecycle::Failed;
                                 }
                             }
@@ -203,6 +202,11 @@ where
     /// Apply supervision strategy.
     /// If the actor fails, the strategy is applied.
     ///
+    /// # Arguments
+    /// 
+    /// * `strategy` - The supervision strategy to apply.
+    /// * `retries` - The current number of retries for the actor.
+    /// 
     async fn apply_supervision_strategy(
         &mut self,
         strategy: SupervisionStrategy,
@@ -227,14 +231,13 @@ where
                         tokio::time::sleep(duration).await;
                     }
                     *retries += 1;
-                    //let error = ctx.current_error();
                     match self.context.restart(&mut self.actor).await {
                         Ok(_) => {
                             self.lifecycle = ActorLifecycle::Started;
                             *retries = 0;
                         }
                         Err(err) => {
-                            self.context.set_current_error(err);
+                            error!("Failed to restart actor {}: {:?}", &self.actor_path, err);
                         }
                     }
                 } else {
@@ -305,8 +308,9 @@ mod tests {
         let actor = TestActor;
         let actor_path = ActorPath::from("test_actor");
         let registry: ActorRegistry = Arc::new(RwLock::new(HashMap::new()));
+        let conf = Config::default();
         let (mut runner, actor_ref, _action_sender) =
-            ActorRunner::new(actor, actor_path, None, registry);
+            ActorRunner::new(actor, actor_path, None, registry, &conf);
 
         // Initialize the actor runner.
         let (init_sender, init_receiver) = oneshot::channel();
@@ -344,8 +348,9 @@ mod tests {
         let actor = TestActor;
         let actor_path = ActorPath::from("msg_handler");
         let registry: ActorRegistry = Arc::new(RwLock::new(HashMap::new()));
+        let conf = Config::default();
         let (mut runner, actor_ref, _action_sender) =
-            ActorRunner::new(actor, actor_path, None, registry);
+            ActorRunner::new(actor, actor_path, None, registry, &conf);
 
         let (init_sender, init_receiver) = oneshot::channel();
         tokio::spawn(async move {
@@ -365,8 +370,9 @@ mod tests {
         let actor = TestActor;
         let actor_path = ActorPath::from("stop_actor");
         let registry: ActorRegistry = Arc::new(RwLock::new(HashMap::new()));
+        let conf = Config::default();
         let (mut runner, _actor_ref, action_sender) =
-            ActorRunner::new(actor, actor_path, None, registry);
+            ActorRunner::new(actor, actor_path, None, registry, &conf);
 
         let (init_sender, init_receiver) = oneshot::channel();
         let runner_handle = tokio::spawn(async move {

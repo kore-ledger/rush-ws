@@ -7,13 +7,17 @@ use crate::{
     ActorPath, Error,
     handler::HandlerHelper,
     supervision::SupervisionStrategy,
-    system::{ActorSignal, SignalSender, Supervisor},
+    system::{ActorSignal, SignalSender, Supervisor, Config},
 };
 use async_trait::async_trait;
 use serde::{Serialize, de::DeserializeOwned};
 use std::fmt::Debug;
 use tokio::sync::broadcast::{Receiver as EventReceiver, Sender as EventSender};
 use tracing::{debug, error};
+
+/// The maximum depth of the actor hierarchy. This is used to prevent infinite recursion when 
+/// restarting actors.
+const MAX_ACTOR_DEPTH: usize = 100;
 
 /// Events that this actor will emit after processing a message. The events emitted by a message
 /// handler will be used to apply the event sourcing pattern.
@@ -161,11 +165,14 @@ pub trait Actor: Send + Sync + Sized + 'static {
         &mut self,
         _child: &ActorPath,
         error: &Error,
-        _ctx: &mut ActorContext<Self>,
+        ctx: &mut ActorContext<Self>,
     ) {
         // Default implementation from child actor errors.
         debug!("Handling error: {:?}", error);
-        //self.on_child_fault(error, ctx).await;
+        // Emit the error to the parent actor.
+        ctx.emit_error(error).await.unwrap_or_else(|e| {
+            error!("Failed to emit fault for child error: {:?}", e);
+        });
     }
 
     /// Called when a fault occurs in a child actor.
@@ -176,6 +183,7 @@ pub trait Actor: Send + Sync + Sized + 'static {
     ///
     /// * `child` - The path of the child actor that faulted.
     /// * `error` - The error that occurred.
+    /// * `ctx` - The actor context.
     ///
     /// # Returns
     ///
@@ -189,10 +197,15 @@ pub trait Actor: Send + Sync + Sized + 'static {
         &mut self,
         _child: &ActorPath,
         error: &Error,
-        _ctx: &mut ActorContext<Self>,
+        ctx: &mut ActorContext<Self>,
     ) {
         // Default implementation from child actor errors.
         debug!("Handling fault: {:?}", error);
+        // Emit the error to the parent actor.
+        ctx.emit_fault(error).await.unwrap_or_else(|e| {
+            error!("Failed to emit fault for child fault: {:?}", e);
+        });
+        
     }
 }
 
@@ -204,12 +217,12 @@ pub struct ActorContext<A: Actor> {
     path: ActorPath,
     /// The actor system reference.
     supervision_handler: Supervisor,
-    /// Current error.
-    current_error: Option<Error>,
     /// Event sender.
     event_sender: EventSender<<A as Actor>::Event>,
     /// Signal sender to parent actor.
     signal_sender: Option<SignalSender>,
+    /// Actor systemconfiguration.
+    config: Config,
 }
 
 impl<A: Actor> ActorContext<A> {
@@ -224,13 +237,14 @@ impl<A: Actor> ActorContext<A> {
         supervision_handler: Supervisor,
         event_sender: EventSender<<A as Actor>::Event>,
         signal_sender: Option<SignalSender>,
+        config: &Config,
     ) -> Self {
         Self {
             path,
             supervision_handler,
-            current_error: None,
             event_sender,
             signal_sender,
+            config: config.clone(),
         }
     }
 
@@ -259,7 +273,10 @@ impl<A: Actor> ActorContext<A> {
         B: Actor,
     {
         let path = self.path.clone() / name;
-        self.supervision_handler.create_actor(actor, &path).await
+        if self.path.level() >= MAX_ACTOR_DEPTH {
+            return Err(Error::CreateActor("Max actor depth exceeded".into()));
+        }
+        self.supervision_handler.create_actor(actor, &path, &self.config).await
     }
 
     /// Gets a child actor by name.
@@ -315,30 +332,6 @@ impl<A: Actor> ActorContext<A> {
         self.supervision_handler.restart_children().await
     }
 
-    /// Sets the current error in the context.
-    ///
-    /// # Arguments
-    /// * `error` - The error to set.
-    ///  
-    pub fn set_current_error(&mut self, error: Error) {
-        self.current_error = Some(error);
-    }
-
-    /// Gets the current error in the context.
-    ///
-    /// # Returns
-    /// * `Option<&Error>` - The current error, if any.
-    ///  
-    pub fn current_error(&self) -> Option<&Error> {
-        self.current_error.as_ref()
-    }
-
-    /// Clears the current error in the context.
-    ///
-    pub fn clear_current_error(&mut self) {
-        self.current_error = None;
-    }
-
     /// Restarts the actor by calling its `pre_restart` method.
     ///
     /// # Arguments
@@ -374,10 +367,10 @@ impl<A: Actor> ActorContext<A> {
     ///
     /// * `error` - The error to emit.
     ///
-    pub async fn emit_error(&self, error: Error) -> Result<(), Error> {
+    pub async fn emit_error(&self, error: &Error) -> Result<(), Error> {
         if let Some(signal_sender) = &self.signal_sender
             && let Err(e) = signal_sender
-                .send(ActorSignal::ChildError(self.path.clone(), error))
+                .send(ActorSignal::ChildError(self.path.clone(), error.clone()))
                 .await
         {
             error!("Failed to emit error signal: {}", e);
@@ -396,10 +389,10 @@ impl<A: Actor> ActorContext<A> {
     ///
     /// * `error` - The error to emit.
     ///
-    pub async fn emit_fault(&self, error: Error) -> Result<(), Error> {
+    pub async fn emit_fault(&self, error: &Error) -> Result<(), Error> {
         if let Some(signal_sender) = &self.signal_sender
             && let Err(e) = signal_sender
-                .send(ActorSignal::ChildFault(self.path.clone(), error))
+                .send(ActorSignal::ChildFault(self.path.clone(), error.clone()))
                 .await
         {
             error!("Failed to emit fault signal: {}", e);
@@ -568,11 +561,13 @@ mod tests {
         let handler = HandlerHelper::new(sender);
         let actor_path = ActorPath::from("test_actor");
         let (event_sender, _event_receiver) = broadcast::channel(10);
+        let config = Config::default();
         let context = ActorContext::new(
             actor_path.clone(),
             Supervisor::default(),
             event_sender,
             None,
+            &config,
         );
         let actor_ref = ActorRef::new(
             actor_path.clone(),
@@ -624,11 +619,13 @@ mod tests {
     async fn test_actor_context_path() {
         let actor_path = ActorPath::from("/parent/child");
         let (event_sender, _) = broadcast::channel(10);
+        let config = Config::default();
         let context: ActorContext<TestActor> = ActorContext::new(
             actor_path.clone(),
             Supervisor::default(),
             event_sender,
             None,
+            &config,
         );
 
         assert_eq!(context.path().to_string(), "/parent/child");
@@ -675,7 +672,8 @@ mod tests {
         let counter_clone = counter_check.clone();
         tokio::spawn(async move {
             let mut actor = StatefulActor { counter: 0 };
-            let mut ctx = ActorContext::new(actor_path, Supervisor::default(), event_sender, None);
+            let config = Config::default();
+            let mut ctx = ActorContext::new(actor_path, Supervisor::default(), event_sender, None, &config);
             while let Some(msg) = receiver.recv().await {
                 msg.handle(&mut actor, &mut ctx).await;
                 *counter_clone.write().await = actor.counter;
@@ -709,7 +707,8 @@ mod tests {
         // Spawn actor
         tokio::spawn(async move {
             let mut actor = TestActor;
-            let mut ctx = ActorContext::new(actor_path, Supervisor::default(), event_sender, None);
+            let config = Config::default();
+            let mut ctx = ActorContext::new(actor_path, Supervisor::default(), event_sender, None, &config);
 
             // Emit an event
             let _ = ctx.emit_event(TestEvent::Started);

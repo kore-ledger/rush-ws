@@ -71,6 +71,7 @@ pub fn signal_channel(buffer: usize) -> (SignalSender, SignalReceiver) {
 pub struct System {
     root_path: ActorPath,
     system_handler: Supervisor,
+    config: Config,
 }
 
 impl System {
@@ -78,20 +79,23 @@ impl System {
     ///
     /// # Arguments
     ///
+    /// * `config` - The configuration for the actor system, including mailbox and buffer sizes.
     /// * `cancellation_token` - The cancellation token for the system.
     ///
     /// # Returns
     ///
     /// * `System` - The newly created actor system.
     ///
-    pub fn new(cancellation_token: CancellationToken) -> Self {
+    pub fn new(config: Config,cancellation_token: CancellationToken) -> Self {
         let registry: ActorRegistry = Arc::new(RwLock::new(HashMap::new()));
-        let (child_signal_sender, child_signal_receiver) = signal_channel(10);
+        let (child_signal_sender, child_signal_receiver) = 
+            signal_channel(config.signal_buffer_size);
         let system_handler = Supervisor::new(registry, child_signal_sender);
         let root_path = ActorPath::from("/user");
         let system = System {
             system_handler,
             root_path: root_path.clone(),
+            config,
         };
         let system_runner =
             SystemRunner::new(system.clone(), child_signal_receiver, cancellation_token);
@@ -116,7 +120,7 @@ impl System {
         A: Actor,
     {
         let path = self.root_path.clone() / name;
-        self.system_handler.create_actor(actor, &path).await
+        self.system_handler.create_actor(actor, &path, &self.config).await
     }
 
     /// Retrieves a child actor by name.
@@ -161,7 +165,7 @@ impl System {
     ///
     pub async fn on_child_error(&mut self, path: &ActorPath, error: &Error) -> Result<(), Error> {
         error!("System received ChildError from {:?}: {:?}", path, error);
-        // Handle system-level child error
+        self.system_handler.stop_children().await?;
         Ok(())
     }
 
@@ -174,7 +178,7 @@ impl System {
     ///
     pub async fn on_child_fault(&mut self, path: &ActorPath, error: &Error) -> Result<(), Error> {
         error!("System received ChildFault from {:?}: {:?}", path, error);
-        // Handle system-level child fault
+        //self.stop_children().await?;
         Ok(())
     }
 
@@ -183,12 +187,6 @@ impl System {
     pub async fn stop_children(&mut self) -> Result<(), Error> {
         debug!("System stopped all actors.");
         self.system_handler.stop_children().await
-    }
-
-    /// Restarts all child actors under the system's supervision.
-    ///
-    pub async fn restart_children(&mut self) -> Result<(), Error> {
-        self.system_handler.restart_children().await
     }
 }
 
@@ -295,6 +293,7 @@ impl Supervisor {
         &mut self,
         actor: A,
         path: &ActorPath,
+        conf: &Config,
     ) -> Result<ActorRef<A>, Error>
     where
         A: Actor,
@@ -308,12 +307,14 @@ impl Supervisor {
         }
 
         // Contruct the actor runner and reference
-        let (mut runner, actor_ref, action_sender) = ActorRunner::new(
-            actor,
-            path.clone(),
-            Some(self.child_signal_sender.clone()),
-            self.registry.clone(),
-        );
+        let (mut runner, actor_ref, action_sender) = 
+            ActorRunner::new(
+                actor,
+                path.clone(),
+                Some(self.child_signal_sender.clone()),
+                self.registry.clone(),
+                conf,
+            );
 
         // Insert the actor reference into the registry before initialization 
         // to allow for recursive actor creation
@@ -330,9 +331,14 @@ impl Supervisor {
         });
         
         // Wait for initialization to complete
-        let _ = init_receiver
-            .await
-            .expect("Failed creating actor. Initialization channel closed unexpectedly.");
+        if let Err(e) = init_receiver.await {
+            // Remove the actor reference from the registry if initialization fails
+            self.registry.write().await.remove(path);
+            return Err(Error::Supervision(format!(
+                "Failed to initialize actor '{}': {:?}",
+                path, e
+            )));
+        }
 
         // Insert the child into supervision
         self.action_senders
@@ -439,6 +445,10 @@ impl Supervisor {
 
     /// Stops all child actors under supervision.
     ///
+    /// # Returns
+    /// 
+    /// * `Result<(), Error>` - Ok if all children stopped successfully, error otherwise.
+    /// 
     pub async fn stop_children(&mut self) -> Result<(), Error> {
         let action_senders = self.action_senders.read().await;
         for (path, action_sender) in action_senders.iter() {
@@ -457,6 +467,10 @@ impl Supervisor {
 
     /// Restarts all child actors under supervision.
     ///
+    /// # Returns
+    /// 
+    /// * `Result<(), Error>` - Ok if all children restarted successfully, error otherwise.
+    /// 
     pub async fn restart_children(&self) -> Result<(), Error> {
         let action_senders = self.action_senders.read().await;
         for (path, action_sender) in action_senders.iter() {
@@ -472,11 +486,39 @@ impl Supervisor {
     }
 }
 
+/// Default implementation for Supervisor with an empty registry and a dummy signal sender.
 impl Default for Supervisor {
     fn default() -> Self {
         let registry: ActorRegistry = Arc::new(RwLock::new(HashMap::new()));
         let (child_signal_sender, _child_signal_receiver) = signal_channel(10);
         Supervisor::new(registry, child_signal_sender)
+    }
+}
+
+
+/// Configuration for the actor system, including mailbox and buffer sizes.
+#[derive(Clone)]
+pub struct Config {
+    /// The size of the mailbox for each actor.
+    pub mailbox_size: usize,
+    /// The size of the event buffer for each actor.
+    pub event_buffer_size: usize,
+    /// The size of the signal buffer for each actor.
+    pub signal_buffer_size: usize,
+    /// The size of the action buffer for each actor.
+    pub action_buffer_size: usize,
+}
+
+/// Default configuration for the actor system with reasonable defaults for mailbox and buffer 
+/// sizes.
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            mailbox_size: 10_000,
+            event_buffer_size: 10_000,
+            signal_buffer_size: 100_000,
+            action_buffer_size: 10_000,
+        }
     }
 }
 
@@ -535,7 +577,7 @@ mod tests {
     #[traced_test]
     async fn test_system() {
         let token = CancellationToken::new();
-        let mut system = System::new(token.clone());
+        let mut system = System::new(Config::default(), token.clone());
         assert!(logs_contain(
             "SystemRunner started for actor system with root path: /user"
         ));
@@ -577,34 +619,6 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Wait for shutdown logs
     }
 
-    /*
-    struct TestActor;
-
-    #[async_trait::async_trait]
-    impl Actor for TestActor {
-        type Message = String;
-        type Response = String;
-        type Event = ();
-
-        async fn handle(
-            &mut self,
-            _ctx: &mut ActorContext<Self>,
-            _sender: &ActorPath,
-            msg: Self::Message,
-        ) -> Result<Self::Response, Error> {
-            Ok(format!("Received: {}", msg))
-        }
-
-        async fn pre_start(&mut self, ctx: &mut ActorContext<Self>) -> Result<(), Error> {
-            ctx.create_child(TestActor, "child").await?;
-            /*if ctx.child_exists("child").await? {
-                let child_ref = ctx.get_child::<TestActor>("child").await?;
-                assert!(child_ref.is_some());
-            }*/
-            Ok(())
-        }
-    }
-
     struct TestErrorActor;
 
     #[async_trait::async_trait]
@@ -629,43 +643,9 @@ mod tests {
 
     #[tokio::test]
     #[serial_test::serial]
-    #[traced_test]
-    async fn test_system_actor() {
-        let token = CancellationToken::new();
-        let mut system = System::new(token.clone());
-        // Create a new actor
-        let actor_ref = system
-            .create_actor(TestActor, "test_actor")
-            .await
-            .expect("Failed to create actor");
-        assert_eq!(actor_ref.path().to_string(), "/user/test_actor");
-
-        // Try creating an actor with the same name
-        let duplicate_result = system.create_actor(TestActor, "test_actor").await;
-        assert!(duplicate_result.is_err());
-
-
-        // Retrieve the created actor
-        let retrieved_ref: Option<ActorRef<TestActor>> = system
-            .get_actor("test_actor")
-            .await
-            .expect("Failed to get actor");
-        assert!(retrieved_ref.is_some());
-        let retrieved_ref = retrieved_ref.unwrap();
-        assert_eq!(&retrieved_ref.path().to_string(), "/user/test_actor");
-
-        // Stop the created actor
-        let stop_result = system.stop().await;
-        assert!(stop_result.is_ok());
-
-        token.cancel();
-        println!("System actor test completed.");
-    }
-
-    #[tokio::test]
-    #[serial_test::serial]
     async fn test_system_multiple_actors() {
-        let mut system = System::new(CancellationToken::new());
+        let token = CancellationToken::new();
+        let mut system = System::new(Config::default(), token.clone());
 
         // Create multiple actors
         let actor1 = system.create_actor(TestActor, "actor1").await.unwrap();
@@ -694,52 +674,15 @@ mod tests {
             .is_some());
 
         // Clean up
-        system.stop().await.unwrap();
-    }
+        token.cancel();
 
-    #[tokio::test]
-    #[serial_test::serial]
-    async fn test_system_message_passing() {
-        let mut system = System::new(CancellationToken::new());
-        let actor_ref = system
-            .create_actor(TestActor, "messenger")
-            .await
-            .unwrap();
-
-        // Test tell (fire and forget)
-        let tell_result = actor_ref.tell("Hello".to_string()).await;
-        assert!(tell_result.is_ok());
-
-        // Test ask (request-response)
-        let response = actor_ref.ask("World".to_string()).await.unwrap();
-        assert_eq!(response, "Received: World");
-
-        system.stop().await.unwrap();
-    }
-
-    #[tokio::test]
-    #[serial_test::serial]
-    async fn test_child_actor_creation() {
-        let mut system = System::new(CancellationToken::new());
-        let _actor_ref = system.create_actor(TestActor, "parent").await.unwrap();
-
-        // The TestActor creates a child in pre_start
-        // Wait a bit for child to be created
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-        // Verify parent exists
-        assert!(system
-            .get_actor::<TestActor>("parent")
-            .await
-            .unwrap()
-            .is_some());
-
-        system.stop().await.unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Wait for shutdown logs
     }
 
     #[tokio::test]
     async fn test_error_actor_fails_to_start() {
-        let mut system = System::new(CancellationToken::new());
+        let token = CancellationToken::new();
+        let mut system = System::new(Config::default(), token.clone());
 
         // Try to create an actor that fails in pre_start
         let result = system.create_actor(TestErrorActor, "error_actor").await;
@@ -748,12 +691,19 @@ mod tests {
         // Verify the actor was not added to the system
         let retrieved = system.get_actor::<TestErrorActor>("error_actor").await;
         assert!(retrieved.is_err());
+
+        // Clean up
+        token.cancel();
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Wait for shutdown logs
     }
 
+    
     #[tokio::test]
     #[serial_test::serial]
     async fn test_concurrent_actor_operations() {
-        let mut system = System::new(CancellationToken::new());
+        let token = CancellationToken::new();
+        let mut system = System::new(Config::default(), token.clone());
         let actor_ref = system
             .create_actor(TestActor, "concurrent")
             .await
@@ -776,7 +726,8 @@ mod tests {
             assert_eq!(result.unwrap(), format!("Received: Message {}", i));
         }
 
-        system.stop().await.unwrap();
+        token.cancel();
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Wait for shutdown logs
     }
 
     struct CounterActor {
@@ -803,7 +754,8 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial]
     async fn test_actor_state() {
-        let mut system = System::new(CancellationToken::new());
+        let token = CancellationToken::new();
+        let mut system = System::new(Config::default(), token.clone());
         let actor_ref = system
             .create_actor(CounterActor { count: 0 }, "counter")
             .await
@@ -815,7 +767,8 @@ mod tests {
             assert_eq!(count, i);
         }
 
-        system.stop().await.unwrap();
+        token.cancel();
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Wait for shutdown logs
     }
-    */
 }

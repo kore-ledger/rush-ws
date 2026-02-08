@@ -7,7 +7,7 @@ use thiserror::Error;
 /// Errors that can occur in the actor system.
 /// This enum defines the various errors that can occur when working with actors,
 /// such as when sending messages, starting actors, or handling messages.
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone)]
 pub enum Error {
     /// Error when sending a message to an actor fails.
     #[error("Failed to send message to actor: {0}")]

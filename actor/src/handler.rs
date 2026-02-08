@@ -182,8 +182,9 @@ impl<A: Actor> Clone for HandlerHelper<A> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Actor, ActorPath, Event, Message, Response};
+    use crate::{Actor, ActorPath, Event, Message, Response, system::Config};
     use tokio::time::{Duration, sleep};
+    use tracing_test::traced_test;
 
     struct TestActor;
 
@@ -218,12 +219,14 @@ mod tests {
         // Spawn a task to process messages
         tokio::spawn(async move {
             let mut actor = TestActor;
+            let config = Config::default();
             let mut ctx = ActorContext::new(
                 ActorPath::from("test_actor"),
                 // Dummy supervision handler
                 crate::system::Supervisor::default(),
                 tokio::sync::broadcast::channel(10).0,
                 None,
+                &config,
             );
             while let Some(msg) = receiver.recv().await {
                 msg.handle(&mut actor, &mut ctx).await;
@@ -256,11 +259,13 @@ mod tests {
         // Spawn a task to process messages
         tokio::spawn(async move {
             let mut actor = TestActor;
+            let config = Config::default();
             let mut ctx = ActorContext::new(
                 ActorPath::from("test_actor"),
                 crate::system::Supervisor::default(),
                 tokio::sync::broadcast::channel(100).0,
                 None,
+                &config,
             );
             while let Some(msg) = receiver.recv().await {
                 msg.handle(&mut actor, &mut ctx).await;
@@ -304,5 +309,64 @@ mod tests {
 
         assert!(result1.is_ok());
         assert!(result2.is_ok());
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_handler_errors() {
+        let (sender, receiver) = mailbox::<TestActor>(1); // Small buffer to trigger send failure
+        let handler = HandlerHelper::new(sender);  
+
+        drop(receiver); // Drop receiver to close the channel
+
+        let result = handler
+            .tell(ActorPath::from("sender"), "Test".to_string())
+            .await; 
+        assert!(result.is_err());
+
+        let result = handler
+            .ask(ActorPath::from("sender"), "Test".to_string())
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_actor_message_debug() {
+        let msg = ActorMessage::<TestActor>::new(
+            ActorPath::from("sender"),
+            "Test message".to_string(),
+            None,
+        );
+        let debug_str = format!("{:?}", msg);
+        assert!(debug_str.contains("ActorMessage"));
+        assert!(debug_str.contains("sender"));
+        assert!(debug_str.contains("<message>"));
+        assert!(debug_str.contains("None"));
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    #[serial_test::serial]
+    async fn test_actor_message_sender_error() {
+        let (sender, receiver) = oneshot::channel::<Result<String, Error>>();
+        let msg = ActorMessage::<TestActor>::new(
+            ActorPath::from("sender"),
+            "Test message".to_string(),
+            Some(sender),
+        );
+        drop(receiver); // Drop receiver to close the channel
+        let mut ctx = ActorContext::new(
+            ActorPath::from("test_actor"),
+            crate::system::Supervisor::default(),
+            tokio::sync::broadcast::channel(100).0,
+            None,
+            &Config::default(),
+        );
+
+        msg.handle(&mut TestActor, &mut ctx).await;
+
+        // Check that the error was logged
+        assert!(logs_contain("Failed to send response back to sender"));
+
     }
 }
