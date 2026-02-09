@@ -34,6 +34,13 @@ pub enum ActorSignal {
 }
 
 impl ActorSignal {
+    /// Handles the actor signal by invoking the appropriate handler on the parent actor.
+    ///
+    /// # Arguments
+    /// 
+    /// * `actor` - The parent actor that will handle the signal.
+    /// * `ctx` - The actor context for the parent actor.
+    ///
     pub async fn handle<A: Actor>(&self, actor: &mut A, ctx: &mut ActorContext<A>) {
         match self {
             ActorSignal::ChildFault(path, error) => {
@@ -70,7 +77,7 @@ pub fn signal_channel(buffer: usize) -> (SignalSender, SignalReceiver) {
 #[derive(Clone)]
 pub struct System {
     root_path: ActorPath,
-    system_handler: Supervisor,
+    system_supervisor: Supervisor,
     config: Config,
 }
 
@@ -90,10 +97,10 @@ impl System {
         let registry: ActorRegistry = Arc::new(RwLock::new(HashMap::new()));
         let (child_signal_sender, child_signal_receiver) = 
             signal_channel(config.signal_buffer_size);
-        let system_handler = Supervisor::new(registry, child_signal_sender);
+        let system_supervisor = Supervisor::new(registry, child_signal_sender);
         let root_path = ActorPath::from("/user");
         let system = System {
-            system_handler,
+            system_supervisor,
             root_path: root_path.clone(),
             config,
         };
@@ -120,7 +127,7 @@ impl System {
         A: Actor,
     {
         let path = self.root_path.clone() / name;
-        self.system_handler.create_actor(actor, &path, &self.config).await
+        self.system_supervisor.create_actor(actor, &path, &self.config).await
     }
 
     /// Retrieves a child actor by name.
@@ -138,7 +145,7 @@ impl System {
         A: Actor,
     {
         let child_path = self.root_path.clone() / name;
-        self.system_handler.get_actor(&child_path).await
+        self.system_supervisor.get_actor(&child_path).await
     }
 
     /// Checks if a child actor exists by name.
@@ -153,7 +160,7 @@ impl System {
     ///
     pub async fn actor_exists(&self, name: &str) -> Result<bool, Error> {
         let child_path = self.root_path.clone() / name;
-        self.system_handler.child_exists(&child_path).await
+        self.system_supervisor.child_exists(&child_path).await
     }
 
     /// Handles a child actor error signal.
@@ -165,7 +172,7 @@ impl System {
     ///
     pub async fn on_child_error(&mut self, path: &ActorPath, error: &Error) -> Result<(), Error> {
         error!("System received ChildError from {:?}: {:?}", path, error);
-        self.system_handler.stop_children().await?;
+        self.system_supervisor.stop_children().await?;
         Ok(())
     }
 
@@ -178,7 +185,7 @@ impl System {
     ///
     pub async fn on_child_fault(&mut self, path: &ActorPath, error: &Error) -> Result<(), Error> {
         error!("System received ChildFault from {:?}: {:?}", path, error);
-        //self.stop_children().await?;
+        self.system_supervisor.stop_children().await?;
         Ok(())
     }
 
@@ -186,13 +193,14 @@ impl System {
     ///
     pub async fn stop_children(&mut self) -> Result<(), Error> {
         debug!("System stopped all actors.");
-        self.system_handler.stop_children().await
+        self.system_supervisor.stop_children().await
     }
 }
 
 /// Runner for the actor system to handle signals and lifecycle events.
 ///
 struct SystemRunner {
+    /// The actor system instance to manage.
     system: System,
     signal_receiver: SignalReceiver,
     cancellation_token: CancellationToken,
@@ -331,13 +339,14 @@ impl Supervisor {
         });
         
         // Wait for initialization to complete
-        if let Err(e) = init_receiver.await {
+        let init_result = init_receiver.await
+            .expect("Sender should not be dropped before initialization completes or fails.");
+
+
+        if let Err(e) = init_result {
             // Remove the actor reference from the registry if initialization fails
             self.registry.write().await.remove(path);
-            return Err(Error::Supervision(format!(
-                "Failed to initialize actor '{}': {:?}",
-                path, e
-            )));
+            return Err(e);
         }
 
         // Insert the child into supervision

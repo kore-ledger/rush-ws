@@ -215,8 +215,8 @@ pub trait Actor: Send + Sync + Sized + 'static {
 pub struct ActorContext<A: Actor> {
     /// The path of the actor.
     path: ActorPath,
-    /// The actor system reference.
-    supervision_handler: Supervisor,
+    /// The actor supervisor.
+    actor_supervisor: Supervisor,
     /// Event sender.
     event_sender: EventSender<<A as Actor>::Event>,
     /// Signal sender to parent actor.
@@ -226,22 +226,31 @@ pub struct ActorContext<A: Actor> {
 }
 
 impl<A: Actor> ActorContext<A> {
+    
     /// Creates a new actor context.
     ///
     /// # Arguments
     ///
     /// * `path` - The path of the actor.
+    /// * `actor_supervisor` - The actor supervisor.
+    /// * `event_sender` - The event sender for the actor.
+    /// * `signal_sender` - The signal sender to the parent actor.
+    /// * `config` - The actor system configuration.
+    ///
+    /// # Returns
+    /// 
+    /// Returns a new actor context.
     ///
     pub fn new(
         path: ActorPath,
-        supervision_handler: Supervisor,
+        actor_supervisor: Supervisor,
         event_sender: EventSender<<A as Actor>::Event>,
         signal_sender: Option<SignalSender>,
         config: &Config,
     ) -> Self {
         Self {
             path,
-            supervision_handler,
+            actor_supervisor,
             event_sender,
             signal_sender,
             config: config.clone(),
@@ -276,7 +285,7 @@ impl<A: Actor> ActorContext<A> {
         if self.path.level() >= MAX_ACTOR_DEPTH {
             return Err(Error::CreateActor("Max actor depth exceeded".into()));
         }
-        self.supervision_handler.create_actor(actor, &path, &self.config).await
+        self.actor_supervisor.create_actor(actor, &path, &self.config).await
     }
 
     /// Gets a child actor by name.
@@ -294,7 +303,7 @@ impl<A: Actor> ActorContext<A> {
         B: Actor,
     {
         let child_path = self.path.clone() / name;
-        self.supervision_handler.get_actor(&child_path).await
+        self.actor_supervisor.get_actor(&child_path).await
     }
 
     /// Checks if a child actor exists by name.
@@ -309,7 +318,7 @@ impl<A: Actor> ActorContext<A> {
     ///
     pub async fn child_exists(&self, name: &str) -> Result<bool, Error> {
         let child_path = self.path.clone() / name;
-        self.supervision_handler.child_exists(&child_path).await
+        self.actor_supervisor.child_exists(&child_path).await
     }
 
     /// Stops all child actors of this actor.
@@ -319,7 +328,7 @@ impl<A: Actor> ActorContext<A> {
     /// * `Result<(), Error>` - The result of the stop operation.
     ///
     pub async fn stop_children(&mut self) -> Result<(), Error> {
-        self.supervision_handler.stop_children().await
+        self.actor_supervisor.stop_children().await
     }
 
     /// Restarts all child actors of this actor.
@@ -329,7 +338,7 @@ impl<A: Actor> ActorContext<A> {
     /// * `Result<(), Error>` - The result of the restart operation.
     ///
     pub async fn restart_children(&mut self) -> Result<(), Error> {
-        self.supervision_handler.restart_children().await
+        self.actor_supervisor.restart_children().await
     }
 
     /// Restarts the actor by calling its `pre_restart` method.
