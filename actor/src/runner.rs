@@ -207,7 +207,7 @@ where
 
             }
         }
-        ActorLifecycle::Stopped
+        ActorLifecycle::Failed
     }
 
     /// Apply supervision strategy.
@@ -400,7 +400,19 @@ mod tests {
             .unwrap();
     }
 
-    struct TestRestartActor;
+    struct TestRestartActor{
+        failed: bool,
+        counter: usize,    
+    }
+
+    impl TestRestartActor {
+        fn new(failed: bool) -> Self {
+            Self {
+                failed,
+                counter: 0,
+            }
+        }
+    }
 
     #[async_trait::async_trait]
     impl Actor for TestRestartActor {
@@ -417,10 +429,22 @@ mod tests {
             assert_eq!(_msg, "Hello, Actor!");
             Ok("ok".to_string())
         }
-
+       
+        fn supervision_strategy() -> SupervisionStrategy {
+            SupervisionStrategy::Retry(Strategy::FixedInterval(FixedIntervalStrategy::new(
+                3,
+                std::time::Duration::from_millis(100),
+            )))
+        }
         async fn pre_start(&mut self, _ctx: &mut ActorContext<Self>) -> Result<(), Error> {
+            if !self.failed && self.counter == 2 {
+                return Ok(());
+            }
+
+            self.counter += 1;
             // Simulate failure on pre_start to trigger restart
             Err(Error::CreateActor("Restart actor.".to_owned()))
+
         }
     }
 
@@ -428,7 +452,8 @@ mod tests {
     #[tracing_test::traced_test]
     #[serial_test::serial]
     async fn test_actor_restart_action() {
-        let actor = TestRestartActor;
+        // It always fails.
+        let actor = TestRestartActor::new(true);
         let actor_path = ActorPath::from("restart_actor");
         let registry: ActorRegistry = Arc::new(RwLock::new(HashMap::new()));
         let conf = Config::default();
@@ -447,6 +472,28 @@ mod tests {
         assert!(result.is_ok());
         let init_result = result.unwrap();
         assert!(init_result.is_err());
+
+        // It always fails two times before succeeding.
+        let actor = TestRestartActor::new(false);
+        let actor_path = ActorPath::from("restart_actor");
+        let registry: ActorRegistry = Arc::new(RwLock::new(HashMap::new()));
+        let conf = Config::default();
+        let (mut runner, _actor_ref, _action_sender) =
+            ActorRunner::new(actor, actor_path, None, registry, &conf); 
+        
+        let (init_sender, init_receiver) = oneshot::channel();
+        tokio::spawn(async move {
+            runner.init(Some(init_sender)).await;
+        });
+        
+        let result =    init_receiver.await;
+        assert!(logs_contain("Actor /restart_actor created."));
+        assert!(logs_contain("Actor /restart_actor pre_start failed: CreateActor(\"Restart actor.\")"));
+       
+        assert!(result.is_ok());
+        let init_result = result.unwrap();
+        assert!(init_result.is_ok());
+
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
     }
 
