@@ -3,8 +3,8 @@
 //! The `path` module provides the `ActorPath` type. The `ActorPath` type is a path to an actor in the actor system.
 //!
 
-use std::{cmp::Ordering, sync::Arc};
 use std::fmt::{Error, Formatter};
+use std::{cmp::Ordering, sync::Arc};
 
 /// Actor path. This is a path to an actor in the actor system.
 ///
@@ -38,7 +38,7 @@ impl ActorPath {
         if self.0.len() > 1 {
             let mut tokens = (*self.0).to_vec();
             tokens.truncate(tokens.len() - 1);
-            ActorPath(Arc::from(tokens))    
+            ActorPath(Arc::from(tokens))
         } else {
             ActorPath(Arc::new([]))
         }
@@ -245,17 +245,19 @@ mod tests {
     #[test]
     fn parse_two_deep() {
         let path = ActorPath::from("/acme/building");
-        assert_eq!(path.0, Arc::from(["acme".to_owned(), "building".to_owned()]));
+        assert_eq!(
+            path.0,
+            Arc::from(["acme".to_owned(), "building".to_owned()])
+        );
     }
 
     #[test]
     fn parse_three_deep() {
         let path = ActorPath::from("/acme/building/room");
-        assert_eq!(path.0, Arc::from(
-            ["acme".to_owned(), 
-            "building".to_owned(), 
-            "room".to_owned()
-            ]));
+        assert_eq!(
+            path.0,
+            Arc::from(["acme".to_owned(), "building".to_owned(), "room".to_owned()])
+        );
     }
 
     #[test]
@@ -273,11 +275,10 @@ mod tests {
     #[test]
     fn parse_get_parent() {
         let path = ActorPath::from("/acme/building/room/sensor").parent();
-        assert_eq!(path.0, Arc::from([
-            "acme".to_owned(), 
-            "building".to_owned(), 
-            "room".to_owned(),
-        ]));
+        assert_eq!(
+            path.0,
+            Arc::from(["acme".to_owned(), "building".to_owned(), "room".to_owned(),])
+        );
     }
 
     #[test]
@@ -388,20 +389,26 @@ mod tests {
     fn test_from_string() {
         let s = String::from("/acme/building/room/sensor");
         let path = ActorPath::from(s);
-        assert_eq!(path.0, Arc::from([
-            "acme".to_owned(), 
-            "building".to_owned(), 
-            "room".to_owned(), 
-            "sensor".to_owned()
-        ]));
+        assert_eq!(
+            path.0,
+            Arc::from([
+                "acme".to_owned(),
+                "building".to_owned(),
+                "room".to_owned(),
+                "sensor".to_owned()
+            ])
+        );
         let s = String::from("/acme/building/room/sensor/");
         let path = ActorPath::from(&s);
-        assert_eq!(path.0, Arc::from([
-            "acme".to_owned(), 
-            "building".to_owned(), 
-            "room".to_owned(), 
-            "sensor".to_owned()
-        ]));
+        assert_eq!(
+            path.0,
+            Arc::from([
+                "acme".to_owned(),
+                "building".to_owned(),
+                "room".to_owned(),
+                "sensor".to_owned()
+            ])
+        );
     }
 
     #[test]

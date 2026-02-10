@@ -37,7 +37,7 @@ impl ActorSignal {
     /// Handles the actor signal by invoking the appropriate handler on the parent actor.
     ///
     /// # Arguments
-    /// 
+    ///
     /// * `actor` - The parent actor that will handle the signal.
     /// * `ctx` - The actor context for the parent actor.
     ///
@@ -93,9 +93,9 @@ impl System {
     ///
     /// * `System` - The newly created actor system.
     ///
-    pub fn new(config: Config,cancellation_token: CancellationToken) -> Self {
+    pub fn new(config: Config, cancellation_token: CancellationToken) -> Self {
         let registry: ActorRegistry = Arc::new(RwLock::new(HashMap::new()));
-        let (child_signal_sender, child_signal_receiver) = 
+        let (child_signal_sender, child_signal_receiver) =
             signal_channel(config.signal_buffer_size);
         let system_supervisor = Supervisor::new(registry, child_signal_sender);
         let root_path = ActorPath::from("/user");
@@ -127,7 +127,9 @@ impl System {
         A: Actor,
     {
         let path = self.root_path.clone() / name;
-        self.system_supervisor.create_actor(actor, &path, &self.config).await
+        self.system_supervisor
+            .create_actor(actor, &path, &self.config)
+            .await
     }
 
     /// Retrieves a child actor by name.
@@ -315,33 +317,31 @@ impl Supervisor {
         }
 
         // Contruct the actor runner and reference
-        let (mut runner, actor_ref, action_sender) = 
-            ActorRunner::new(
-                actor,
-                path.clone(),
-                Some(self.child_signal_sender.clone()),
-                self.registry.clone(),
-                conf,
-            );
+        let (mut runner, actor_ref, action_sender) = ActorRunner::new(
+            actor,
+            path.clone(),
+            Some(self.child_signal_sender.clone()),
+            self.registry.clone(),
+            conf,
+        );
 
-        // Insert the actor reference into the registry before initialization 
+        // Insert the actor reference into the registry before initialization
         // to allow for recursive actor creation
         self.registry
             .write()
             .await
             .insert(path.clone(), Box::new(actor_ref.clone()));
 
-
         // Init the actor
         let (init_sender, init_receiver) = oneshot::channel();
         tokio::spawn(async move {
             runner.init(Some(init_sender)).await;
         });
-        
-        // Wait for initialization to complete
-        let init_result = init_receiver.await
-            .expect("Sender should not be dropped before initialization completes or fails.");
 
+        // Wait for initialization to complete
+        let init_result = init_receiver
+            .await
+            .expect("Sender should not be dropped before initialization completes or fails.");
 
         if let Err(e) = init_result {
             // Remove the actor reference from the registry if initialization fails
@@ -395,33 +395,6 @@ impl Supervisor {
         Ok(self.registry.read().await.contains_key(path))
     }
 
-    /// Stops a child actor by name.
-    ///
-    /// # Arguments
-    ///     
-    /// * `path` - The path of the child actor to stop.
-    ///
-    /// # Returns
-    ///
-    /// * `Result<(), Error>` - Ok if stopped successfully, error otherwise.
-    ///
-    pub async fn stop_child(&self, path: &ActorPath) -> Result<(), Error> {
-        if let Some(action_sender) = self.action_senders.read().await.get(path) {
-            action_sender.send(ChildAction::Stop).await.map_err(|e| {
-                Error::Supervision(format!(
-                    "Failed to send stop action to child '{}': {:?}",
-                    path, e
-                ))
-            })?;
-            Ok(())
-        } else {
-            Err(Error::Supervision(format!(
-                "Child actor '{}' not found for stopping.",
-                path
-            )))
-        }
-    }
-
     /// Restarts a child actor by name.
     ///
     /// # Arguments
@@ -455,9 +428,9 @@ impl Supervisor {
     /// Stops all child actors under supervision.
     ///
     /// # Returns
-    /// 
+    ///
     /// * `Result<(), Error>` - Ok if all children stopped successfully, error otherwise.
-    /// 
+    ///
     pub async fn stop_children(&mut self) -> Result<(), Error> {
         let action_senders = self.action_senders.read().await;
         for (path, action_sender) in action_senders.iter() {
@@ -477,9 +450,9 @@ impl Supervisor {
     /// Restarts all child actors under supervision.
     ///
     /// # Returns
-    /// 
+    ///
     /// * `Result<(), Error>` - Ok if all children restarted successfully, error otherwise.
-    /// 
+    ///
     pub async fn restart_children(&self) -> Result<(), Error> {
         let action_senders = self.action_senders.read().await;
         for (path, action_sender) in action_senders.iter() {
@@ -504,7 +477,6 @@ impl Default for Supervisor {
     }
 }
 
-
 /// Configuration for the actor system, including mailbox and buffer sizes.
 #[derive(Clone)]
 pub struct Config {
@@ -518,7 +490,7 @@ pub struct Config {
     pub action_buffer_size: usize,
 }
 
-/// Default configuration for the actor system with reasonable defaults for mailbox and buffer 
+/// Default configuration for the actor system with reasonable defaults for mailbox and buffer
 /// sizes.
 impl Default for Config {
     fn default() -> Self {
@@ -535,23 +507,26 @@ impl Default for Config {
 mod tests {
 
     use super::*;
-    use crate::{Actor, ActorContext, Error};
+    use crate::{Actor, ActorContext, Error, Event};
     use tracing_test::traced_test;
 
     struct TestActor;
+
+    impl Event for String {}
 
     #[async_trait::async_trait]
     impl Actor for TestActor {
         type Message = String;
         type Response = String;
-        type Event = ();
+        type Event = String;
 
         async fn handle(
             &mut self,
-            _ctx: &mut ActorContext<Self>,
+            ctx: &mut ActorContext<Self>,
             _sender: &ActorPath,
             msg: Self::Message,
         ) -> Result<Self::Response, Error> {
+            let _ = self.on_event("event".to_owned(), ctx);
             Ok(format!("Received: {}", msg))
         }
 
@@ -560,6 +535,10 @@ mod tests {
             let result = ctx.create_child(TestChild, "child").await;
             assert!(result.is_ok());
             Ok(())
+        }
+
+        fn on_event(&mut self, event: Self::Event, _ctx: &mut ActorContext<Self>) {
+            assert_eq!(event, "event".to_owned());
         }
     }
 
@@ -573,14 +552,27 @@ mod tests {
 
         async fn handle(
             &mut self,
-            _ctx: &mut ActorContext<Self>,
+            ctx: &mut ActorContext<Self>,
             _sender: &ActorPath,
             msg: Self::Message,
         ) -> Result<Self::Response, Error> {
+            if msg == "fail" {
+                let _ = ctx
+                    .emit_fault(&Error::Supervision("Test fault".into()))
+                    .await;
+            } else if msg == "error" {
+                let _ = ctx
+                    .emit_error(&Error::Supervision("Test error".into()))
+                    .await;
+            }
             Ok(format!("Child received: {}", msg))
         }
-    }
 
+        async fn post_stop(&mut self, _ctx: &mut ActorContext<Self>) -> Result<(), Error> {
+            debug!("TestChild post_stop called.");
+            Ok(())
+        }
+    }
 
     #[tokio::test]
     #[traced_test]
@@ -666,21 +658,27 @@ mod tests {
         assert_eq!(actor3.path().to_string(), "/user/actor3");
 
         // Verify all actors can be retrieved
-        assert!(system
-            .get_actor::<TestActor>("actor1")
-            .await
-            .unwrap()
-            .is_some());
-        assert!(system
-            .get_actor::<TestActor>("actor2")
-            .await
-            .unwrap()
-            .is_some());
-        assert!(system
-            .get_actor::<TestActor>("actor3")
-            .await
-            .unwrap()
-            .is_some());
+        assert!(
+            system
+                .get_actor::<TestActor>("actor1")
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            system
+                .get_actor::<TestActor>("actor2")
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            system
+                .get_actor::<TestActor>("actor3")
+                .await
+                .unwrap()
+                .is_some()
+        );
 
         // Clean up
         token.cancel();
@@ -707,24 +705,19 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Wait for shutdown logs
     }
 
-    
     #[tokio::test]
     #[serial_test::serial]
     async fn test_concurrent_actor_operations() {
         let token = CancellationToken::new();
         let mut system = System::new(Config::default(), token.clone());
-        let actor_ref = system
-            .create_actor(TestActor, "concurrent")
-            .await
-            .unwrap();
+        let actor_ref = system.create_actor(TestActor, "concurrent").await.unwrap();
 
         // Send multiple concurrent messages
         let mut handles = vec![];
         for i in 0..10 {
             let actor_clone = actor_ref.clone();
-            let handle = tokio::spawn(async move {
-                actor_clone.ask(format!("Message {}", i)).await
-            });
+            let handle =
+                tokio::spawn(async move { actor_clone.ask(format!("Message {}", i)).await });
             handles.push(handle);
         }
 
@@ -779,5 +772,95 @@ mod tests {
         token.cancel();
 
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Wait for shutdown logs
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    #[serial_test::serial]
+    async fn test_child_error() {
+        let token = CancellationToken::new();
+        let mut system = System::new(Config::default(), token.clone());
+        let _ = system.create_actor(TestActor, "parent").await.unwrap();
+        assert!(system.actor_exists("parent").await.unwrap());
+
+        // Retrieve the child actor reference .
+        let child_ref = system
+            .get_actor::<TestChild>("/parent/child")
+            .await
+            .unwrap();
+        assert!(child_ref.is_some());
+        let child_ref = child_ref.unwrap();
+        // Send a message that causes the child to emit an error.
+        let _ = child_ref.ask("error".to_string()).await;
+        assert!(logs_contain(
+            "Actor /user/parent received child error from /user/parent/child"
+        ));
+        assert!(logs_contain("System received ChildError"));
+        assert!(logs_contain("Actor /user/parent received stop action."));
+        assert!(logs_contain("Actor /user/parent stopped."));
+        assert!(logs_contain("Actor /user/parent terminated."));
+        assert!(logs_contain(
+            "Actor /user/parent/child received stop action."
+        ));
+        assert!(logs_contain("Actor /user/parent/child stopped."));
+        assert!(logs_contain("TestChild post_stop called."));
+        assert!(logs_contain("Actor /user/parent/child terminated."));
+
+        // Stop the system.
+        token.cancel();
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Wait for shutdown logs
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    #[serial_test::serial]
+    async fn test_child_fail() {
+        let token = CancellationToken::new();
+        let mut system = System::new(Config::default(), token.clone());
+        let _ = system.create_actor(TestActor, "parent").await.unwrap();
+        assert!(system.actor_exists("parent").await.unwrap());
+
+        // Retrieve the child actor reference .
+        let child_ref = system
+            .get_actor::<TestChild>("/parent/child")
+            .await
+            .unwrap();
+        assert!(child_ref.is_some());
+        let child_ref = child_ref.unwrap();
+        // Send a message that causes the child to emit an fail.
+        let _ = child_ref.ask("fail".to_string()).await;
+        assert!(logs_contain(
+            "Actor /user/parent received child fault from /user/parent/child"
+        ));
+        assert!(logs_contain("System received ChildFault"));
+        assert!(logs_contain("Actor /user/parent received stop action."));
+        assert!(logs_contain("Actor /user/parent stopped."));
+        assert!(logs_contain("Actor /user/parent terminated."));
+        assert!(logs_contain(
+            "Actor /user/parent/child received stop action."
+        ));
+        assert!(logs_contain("Actor /user/parent/child stopped."));
+        assert!(logs_contain("TestChild post_stop called."));
+        assert!(logs_contain("Actor /user/parent/child terminated."));
+
+        // Stop the system.
+        token.cancel();
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Wait for shutdown logs
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    #[serial_test::serial]
+    async fn test_on_event() {
+        let token = CancellationToken::new();
+        let mut system = System::new(Config::default(), token.clone());
+        let actor_ref = system.create_actor(TestActor, "event_test").await.unwrap();
+
+        // Send a message to trigger on_event.
+        let result = actor_ref.ask("trigger event".to_string()).await;
+
+        assert!(result.is_ok());
     }
 }

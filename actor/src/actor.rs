@@ -7,7 +7,7 @@ use crate::{
     ActorPath, Error,
     handler::HandlerHelper,
     supervision::SupervisionStrategy,
-    system::{ActorSignal, SignalSender, Supervisor, Config},
+    system::{ActorSignal, Config, SignalSender, Supervisor},
 };
 use async_trait::async_trait;
 use serde::{Serialize, de::DeserializeOwned};
@@ -15,7 +15,7 @@ use std::fmt::Debug;
 use tokio::sync::broadcast::{Receiver as EventReceiver, Sender as EventSender};
 use tracing::{debug, error};
 
-/// The maximum depth of the actor hierarchy. This is used to prevent infinite recursion when 
+/// The maximum depth of the actor hierarchy. This is used to prevent infinite recursion when
 /// restarting actors.
 const MAX_ACTOR_DEPTH: usize = 100;
 
@@ -80,26 +80,6 @@ pub trait Actor: Send + Sync + Sized + 'static {
         self.pre_start(ctx).await
     }
 
-    /// Called before stopping the actor.
-    /// Override this method to define what should happen before the actor is stopped.
-    /// By default it does nothing.
-    ///
-    /// # Arguments
-    ///
-    /// * `context` - The context of the actor.
-    ///
-    /// # Returns
-    ///
-    /// Returns a void result.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the actor could not be stopped.
-    ///
-    async fn pre_stop(&mut self, _ctx: &mut ActorContext<Self>) -> Result<(), Error> {
-        Ok(())
-    }
-
     /// Called when the actor is stopped.
     ///
     /// # Arguments
@@ -139,7 +119,7 @@ pub trait Actor: Send + Sync + Sized + 'static {
     /// * `event` - The event to handle.
     /// * `ctx` - The actor context.
     ///
-    async fn on_event(&mut self, _event: Self::Event, _ctx: &mut ActorContext<Self>) {
+    fn on_event(&mut self, _event: Self::Event, _ctx: &mut ActorContext<Self>) {
         // Default implementation.
     }
 
@@ -205,7 +185,6 @@ pub trait Actor: Send + Sync + Sized + 'static {
         ctx.emit_fault(error).await.unwrap_or_else(|e| {
             error!("Failed to emit fault for child fault: {:?}", e);
         });
-        
     }
 }
 
@@ -226,7 +205,6 @@ pub struct ActorContext<A: Actor> {
 }
 
 impl<A: Actor> ActorContext<A> {
-    
     /// Creates a new actor context.
     ///
     /// # Arguments
@@ -238,7 +216,7 @@ impl<A: Actor> ActorContext<A> {
     /// * `config` - The actor system configuration.
     ///
     /// # Returns
-    /// 
+    ///
     /// Returns a new actor context.
     ///
     pub fn new(
@@ -285,7 +263,9 @@ impl<A: Actor> ActorContext<A> {
         if self.path.level() >= MAX_ACTOR_DEPTH {
             return Err(Error::CreateActor("Max actor depth exceeded".into()));
         }
-        self.actor_supervisor.create_actor(actor, &path, &self.config).await
+        self.actor_supervisor
+            .create_actor(actor, &path, &self.config)
+            .await
     }
 
     /// Gets a child actor by name.
@@ -382,6 +362,7 @@ impl<A: Actor> ActorContext<A> {
                 .send(ActorSignal::ChildError(self.path.clone(), error.clone()))
                 .await
         {
+            //
             error!("Failed to emit error signal: {}", e);
             Err(Error::SendEvent(format!(
                 "Failed to emit error signal: {}",
@@ -682,7 +663,13 @@ mod tests {
         tokio::spawn(async move {
             let mut actor = StatefulActor { counter: 0 };
             let config = Config::default();
-            let mut ctx = ActorContext::new(actor_path, Supervisor::default(), event_sender, None, &config);
+            let mut ctx = ActorContext::new(
+                actor_path,
+                Supervisor::default(),
+                event_sender,
+                None,
+                &config,
+            );
             while let Some(msg) = receiver.recv().await {
                 msg.handle(&mut actor, &mut ctx).await;
                 *counter_clone.write().await = actor.counter;
@@ -717,7 +704,13 @@ mod tests {
         tokio::spawn(async move {
             let mut actor = TestActor;
             let config = Config::default();
-            let mut ctx = ActorContext::new(actor_path, Supervisor::default(), event_sender, None, &config);
+            let mut ctx = ActorContext::new(
+                actor_path,
+                Supervisor::default(),
+                event_sender,
+                None,
+                &config,
+            );
 
             // Emit an event
             let _ = ctx.emit_event(TestEvent::Started);

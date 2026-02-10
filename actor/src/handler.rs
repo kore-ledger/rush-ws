@@ -315,13 +315,13 @@ mod tests {
     #[serial_test::serial]
     async fn test_handler_errors() {
         let (sender, receiver) = mailbox::<TestActor>(1); // Small buffer to trigger send failure
-        let handler = HandlerHelper::new(sender);  
+        let handler = HandlerHelper::new(sender);
 
         drop(receiver); // Drop receiver to close the channel
 
         let result = handler
             .tell(ActorPath::from("sender"), "Test".to_string())
-            .await; 
+            .await;
         assert!(result.is_err());
 
         let result = handler
@@ -367,6 +367,5 @@ mod tests {
 
         // Check that the error was logged
         assert!(logs_contain("Failed to send response back to sender"));
-
     }
 }

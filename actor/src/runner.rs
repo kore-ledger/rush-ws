@@ -8,8 +8,8 @@ use crate::{
     handler::{HandlerHelper, MailboxReceiver, mailbox},
     supervision::{RetryStrategy, SupervisionStrategy},
     system::{
-        ActionReceiver, ActionSender, ActorRegistry, ActorSignal, ChildAction, SignalReceiver,
-        SignalSender, Supervisor, Config, action_channel, signal_channel,
+        ActionReceiver, ActionSender, ActorRegistry, ActorSignal, ChildAction, Config,
+        SignalReceiver, SignalSender, Supervisor, action_channel, signal_channel,
     },
 };
 
@@ -77,6 +77,14 @@ where
         (runner, actor_ref, action_sender)
     }
 
+    /// Initializes the actor runner, managing the actor's lifecycle and handling supervision.
+    /// This function is responsible for starting the actor, processing messages, and applying
+    /// supervision strategies in case of failures.
+    ///
+    /// # Arguments
+    ///
+    /// * `init_sender` - An optional oneshot sender to communicate the result of the initialization process.
+    ///
     pub async fn init(&mut self, mut init_sender: Option<oneshot::Sender<Result<(), Error>>>) {
         debug!("Initializing actor {} runner.", &self.actor_path);
 
@@ -113,15 +121,18 @@ where
                         .await;
                     // If stopped and we have an init sender, it means we are in the initial
                     // startup phase and we need to communicate the failure to the parent actor
-                    // or to the system. 
-                    if self.lifecycle == ActorLifecycle::Failed && 
-                        let Some(sender) = init_sender.take() &&
-                        let Err(e) = sender.send(Err(
-                            Error::CreateActor(format!("Actor {} failed to start after {} retries.", &self.actor_path, retries)))){
-                         error!(
+                    // or to the system.
+                    if self.lifecycle == ActorLifecycle::Failed
+                        && let Some(sender) = init_sender.take()
+                        && let Err(e) = sender.send(Err(Error::CreateActor(format!(
+                            "Actor {} failed to start after {} retries.",
+                            &self.actor_path, retries
+                        ))))
+                    {
+                        error!(
                             "Failed to send init failure for actor {}: {:?}",
                             &self.actor_path, e
-                         );
+                        );
                     }
                 }
                 ActorLifecycle::Failed => {
@@ -146,6 +157,10 @@ where
     /// Runs the actor, processing incoming messages and signals.
     /// This function enters a loop where it listens for messages and signals,
     /// and delegates handling to the actor.
+    ///
+    /// # Returns
+    ///
+    /// The final lifecycle state of the actor after processing messages and signals.
     ///
     async fn run(&mut self) -> ActorLifecycle {
         debug!("Running actor {}.", &self.actor_path);
@@ -214,10 +229,10 @@ where
     /// If the actor fails, the strategy is applied.
     ///
     /// # Arguments
-    /// 
+    ///
     /// * `strategy` - The supervision strategy to apply.
     /// * `retries` - The current number of retries for the actor.
-    /// 
+    ///
     async fn apply_supervision_strategy(
         &mut self,
         strategy: SupervisionStrategy,
@@ -400,17 +415,14 @@ mod tests {
             .unwrap();
     }
 
-    struct TestRestartActor{
+    struct TestRestartActor {
         failed: bool,
-        counter: usize,    
+        counter: usize,
     }
 
     impl TestRestartActor {
         fn new(failed: bool) -> Self {
-            Self {
-                failed,
-                counter: 0,
-            }
+            Self { failed, counter: 0 }
         }
     }
 
@@ -429,7 +441,7 @@ mod tests {
             assert_eq!(_msg, "Hello, Actor!");
             Ok("ok".to_string())
         }
-       
+
         fn supervision_strategy() -> SupervisionStrategy {
             SupervisionStrategy::Retry(Strategy::FixedInterval(FixedIntervalStrategy::new(
                 3,
@@ -444,7 +456,6 @@ mod tests {
             self.counter += 1;
             // Simulate failure on pre_start to trigger restart
             Err(Error::CreateActor("Restart actor.".to_owned()))
-
         }
     }
 
@@ -458,17 +469,19 @@ mod tests {
         let registry: ActorRegistry = Arc::new(RwLock::new(HashMap::new()));
         let conf = Config::default();
         let (mut runner, _actor_ref, _action_sender) =
-            ActorRunner::new(actor, actor_path, None, registry, &conf); 
-        
+            ActorRunner::new(actor, actor_path, None, registry, &conf);
+
         let (init_sender, init_receiver) = oneshot::channel();
         tokio::spawn(async move {
             runner.init(Some(init_sender)).await;
         });
-        
-        let result =    init_receiver.await;
+
+        let result = init_receiver.await;
         assert!(logs_contain("Actor /restart_actor created."));
-        assert!(logs_contain("Actor /restart_actor pre_start failed: CreateActor(\"Restart actor.\")"));
-       
+        assert!(logs_contain(
+            "Actor /restart_actor pre_start failed: CreateActor(\"Restart actor.\")"
+        ));
+
         assert!(result.is_ok());
         let init_result = result.unwrap();
         assert!(init_result.is_err());
@@ -479,22 +492,23 @@ mod tests {
         let registry: ActorRegistry = Arc::new(RwLock::new(HashMap::new()));
         let conf = Config::default();
         let (mut runner, _actor_ref, _action_sender) =
-            ActorRunner::new(actor, actor_path, None, registry, &conf); 
-        
+            ActorRunner::new(actor, actor_path, None, registry, &conf);
+
         let (init_sender, init_receiver) = oneshot::channel();
         tokio::spawn(async move {
             runner.init(Some(init_sender)).await;
         });
-        
-        let result =    init_receiver.await;
+
+        let result = init_receiver.await;
         assert!(logs_contain("Actor /restart_actor created."));
-        assert!(logs_contain("Actor /restart_actor pre_start failed: CreateActor(\"Restart actor.\")"));
-       
+        assert!(logs_contain(
+            "Actor /restart_actor pre_start failed: CreateActor(\"Restart actor.\")"
+        ));
+
         assert!(result.is_ok());
         let init_result = result.unwrap();
         assert!(init_result.is_ok());
 
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
     }
-
 }
