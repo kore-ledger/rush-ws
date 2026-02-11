@@ -863,4 +863,85 @@ mod tests {
 
         assert!(result.is_ok());
     }
+
+    struct TestRestartParent;
+
+    #[async_trait::async_trait]
+    impl Actor for TestRestartParent {
+        type Message = String;
+        type Response = String;
+        type Event = ();
+
+        async fn handle(
+            &mut self,
+            ctx: &mut ActorContext<Self>,
+            _sender: &ActorPath,
+            msg: Self::Message,
+        ) -> Result<Self::Response, Error> {
+            if msg == "restart" {
+                let _ = ctx.restart_children().await;
+            }
+            Ok(format!("Received: {}", msg))
+        }
+
+        async fn pre_start(&mut self, ctx: &mut ActorContext<Self>) -> Result<(), Error> {
+            debug!("TestRestartParent pre_start called.");
+            let result = ctx.create_child(TestRestartChild, "child").await;
+            assert!(result.is_ok());
+            Ok(())
+        }
+
+        async fn on_child_error(&mut self, path: &ActorPath, error: &Error, ctx: &mut ActorContext<Self>) {
+            debug!("TestRestartParent received child error from {:?}: {:?}", path, error);
+            ctx.restart_children().await.unwrap();
+        }
+    }
+
+    struct TestRestartChild;
+
+    #[async_trait::async_trait]
+    impl Actor for TestRestartChild {
+        type Message = String;
+        type Response = String;
+        type Event = ();
+
+        async fn handle(
+            &mut self,
+            ctx: &mut ActorContext<Self>,
+            _sender: &ActorPath,
+            msg: Self::Message,
+        ) -> Result<Self::Response, Error> {
+            if msg == "fail" {
+                let _ = ctx
+                    .emit_error(&Error::Supervision("Test error".into()))
+                    .await;
+            }
+            Ok(format!("Child received: {}", msg))
+        }
+        
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    #[serial_test::serial]
+    async fn test_child_restart() {
+        let token = CancellationToken::new();
+        let mut system = System::new(Config::default(), token.clone());
+        let _ = system.create_actor(TestRestartParent, "parent").await.unwrap();  
+
+        // Retrieve the child actor reference .
+        let child_ref = system
+            .get_actor::<TestRestartChild>("/parent/child")
+            .await
+            .unwrap();
+        assert!(child_ref.is_some());
+        let child_ref = child_ref.unwrap();
+        // Send a message that causes the child to emit an error.  
+        let _ = child_ref.ask("fail".to_string()).await;
+        assert!(logs_contain(
+            "TestRestartParent received child error from /user/parent/child"
+        ));
+        assert!(logs_contain("Actor /user/parent/child received restart action."));
+    }
+
 }
