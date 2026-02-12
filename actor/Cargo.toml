@@ -20,3 +20,7 @@ criterion = { workspace = true, features = ["html_reports"] }
 serial_test = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"]}
 tracing-test = { workspace = true }
+
+[[bench]]
+name = "actor_benchmarks"
+harness = false

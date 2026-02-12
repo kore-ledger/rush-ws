@@ -22,4 +22,4 @@ mod system;
 pub use actor::{Actor, ActorContext, ActorRef, Event, Message, Response};
 pub use error::Error;
 pub use path::ActorPath;
-pub use system::System;
+pub use system::{Config, System};

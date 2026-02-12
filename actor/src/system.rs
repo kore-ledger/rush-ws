@@ -848,6 +848,36 @@ mod tests {
 
     }
 
+    #[tokio::test]
+    #[traced_test] 
+    #[serial_test::serial] 
+    async fn test_fail_supervision(){
+        let token = CancellationToken::new(); 
+        let mut system = System::new(Config::default(), token.clone()); 
+        let _ = system.create_actor(TestActor, "parent").await.unwrap(); 
+        assert!(system.actor_exists("parent").await.unwrap()); // Retrieve the child actor reference . 
+        
+        let child_ref = system .get_actor::<TestChild>("/parent/child") .await .unwrap(); 
+        assert!(child_ref.is_some()); 
+        let child_ref = child_ref.unwrap();
+
+        // Send a message that causes the child to emit an error. 
+        let _ = child_ref.ask("fail".to_string()).await; 
+        assert!(logs_contain( "Actor /user/parent received child fault from /user/parent/child" )); 
+        assert!(logs_contain("System received ChildFault")); 
+        assert!(logs_contain("Actor /user/parent received stop action.")); 
+        assert!(logs_contain("Actor /user/parent stopped.")); 
+        assert!(logs_contain("Actor /user/parent terminated.")); 
+        assert!(logs_contain( "Actor /user/parent/child received stop action." )); 
+        assert!(logs_contain("Actor /user/parent/child stopped.")); 
+        assert!(logs_contain("TestChild post_stop called.")); 
+        assert!(logs_contain("Actor /user/parent/child terminated.")); 
+        
+        // Stop the system. 
+        token.cancel(); 
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Wait for shutdown logs
+    }
+
     struct TestRestartParent;
 
     #[async_trait::async_trait]
