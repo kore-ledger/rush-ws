@@ -3,7 +3,7 @@
 //! This module provides the main actor system, responsible for
 //! managing actors, supervision and lifecycle signals.
 
-use crate::{Actor, ActorContext, ActorPath, ActorRef, Error, runner::ActorRunner};
+use crate::{Actor, ActorPath, ActorRef, Error, runner::ActorRunner};
 use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error};
@@ -31,26 +31,6 @@ pub enum ActorSignal {
     ChildError(ActorPath, Error),
     /// Signal indicating a child actor encountered a fault.
     ChildFault(ActorPath, Error),
-}
-
-impl ActorSignal {
-    /// Handles the actor signal by invoking the appropriate handler on the parent actor.
-    ///
-    /// # Arguments
-    ///
-    /// * `actor` - The parent actor that will handle the signal.
-    /// * `ctx` - The actor context for the parent actor.
-    ///
-    pub async fn handle<A: Actor>(&self, actor: &mut A, ctx: &mut ActorContext<A>) {
-        match self {
-            ActorSignal::ChildFault(path, error) => {
-                actor.on_child_fault(path, error, ctx).await;
-            }
-            ActorSignal::ChildError(path, error) => {
-                actor.on_child_error(path, error, ctx).await;
-            }
-        }
-    }
 }
 
 /// Type aliases for signal sender.
@@ -395,36 +375,6 @@ impl Supervisor {
         Ok(self.registry.read().await.contains_key(path))
     }
 
-    /// Restarts a child actor by name.
-    ///
-    /// # Arguments
-    ///     
-    /// * `path` - The path of the child actor to restart.
-    ///
-    /// # Returns
-    ///    
-    /// * `Result<(), Error>` - Ok if restarted successfully, error otherwise.
-    ///
-    pub async fn restart_child(&self, path: &ActorPath) -> Result<(), Error> {
-        if let Some(action_sender) = self.action_senders.read().await.get(path) {
-            action_sender
-                .send(ChildAction::Restart)
-                .await
-                .map_err(|e| {
-                    Error::Supervision(format!(
-                        "Failed to send restart action to child '{}': {:?}",
-                        path, e
-                    ))
-                })?;
-            Ok(())
-        } else {
-            Err(Error::Supervision(format!(
-                "Child actor '{}' not found for restarting.",
-                path
-            )))
-        }
-    }
-
     /// Stops all child actors under supervision.
     ///
     /// # Returns
@@ -442,6 +392,7 @@ impl Supervisor {
                 )));
             } else {
                 let _ = self.registry.write().await.remove(path);
+                //let _ = self.action_senders.write().await.remove(path);
             }
         }
         Ok(())
@@ -506,8 +457,10 @@ impl Default for Config {
 #[cfg(test)]
 mod tests {
 
+    use std::time::Duration;
+
     use super::*;
-    use crate::{Actor, ActorContext, Error, Event};
+    use crate::{Actor, ActorContext, Error, Event, supervision::{FixedIntervalStrategy, Strategy, SupervisionStrategy}};
     use tracing_test::traced_test;
 
     struct TestActor;
@@ -526,7 +479,10 @@ mod tests {
             _sender: &ActorPath,
             msg: Self::Message,
         ) -> Result<Self::Response, Error> {
-            let _ = self.on_event("event".to_owned(), ctx);
+            if msg == "event1".to_owned() {
+                let _ = self.on_event(msg.clone(), ctx);
+            }
+            let _ = ctx.emit_event(msg.clone());
             Ok(format!("Received: {}", msg))
         }
 
@@ -535,10 +491,6 @@ mod tests {
             let result = ctx.create_child(TestChild, "child").await;
             assert!(result.is_ok());
             Ok(())
-        }
-
-        fn on_event(&mut self, event: Self::Event, _ctx: &mut ActorContext<Self>) {
-            assert_eq!(event, "event".to_owned());
         }
     }
 
@@ -856,12 +808,44 @@ mod tests {
     async fn test_on_event() {
         let token = CancellationToken::new();
         let mut system = System::new(Config::default(), token.clone());
-        let actor_ref = system.create_actor(TestActor, "event_test").await.unwrap();
 
-        // Send a message to trigger on_event.
-        let result = actor_ref.ask("trigger event".to_string()).await;
+        // Create actor 1
+        let actor_1 = system.create_actor(TestActor, "test1").await.unwrap();
+        let mut receiver_1 = actor_1.subscribe();
 
+        // Create actor 2
+        let actor_2 = system.create_actor(TestActor, "test2").await.unwrap();
+        let mut receiver_2 = actor_2.subscribe();
+
+
+        // Send a message to trigger event in actor 1.
+        let result = actor_1.ask("event1".to_string()).await;
         assert!(result.is_ok());
+
+        // Send a message to trigger event in actor 2
+        let result = actor_2.ask("event2".to_string()).await;
+        assert!(result.is_ok());
+
+        let mut events = 0;
+        loop {
+            if events == 2 {break;}
+            tokio::select! {
+                Ok(event) = receiver_1.recv() => {
+                    assert_eq!(event, "event1".to_owned());
+                    events += 1;
+                }
+                Ok(event) = receiver_2.recv() => {
+                    assert_eq!(event, "event2".to_owned());
+                    events += 1;
+                }
+            }
+
+        }
+
+        // Stop system
+        token.cancel();
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Wait for shutdown logs
+
     }
 
     struct TestRestartParent;
@@ -878,9 +862,7 @@ mod tests {
             _sender: &ActorPath,
             msg: Self::Message,
         ) -> Result<Self::Response, Error> {
-            if msg == "restart" {
-                let _ = ctx.restart_children().await;
-            }
+            let _ = ctx.get_child::<TestRestartChild>("child").await.unwrap();
             Ok(format!("Received: {}", msg))
         }
 
@@ -893,7 +875,10 @@ mod tests {
 
         async fn on_child_error(&mut self, path: &ActorPath, error: &Error, ctx: &mut ActorContext<Self>) {
             debug!("TestRestartParent received child error from {:?}: {:?}", path, error);
-            ctx.restart_children().await.unwrap();
+            let name = path.key();
+            if ctx.child_exists(&name).await.unwrap() {
+                ctx.restart_children().await.unwrap();
+            }
         }
     }
 
@@ -918,7 +903,15 @@ mod tests {
             }
             Ok(format!("Child received: {}", msg))
         }
-        
+
+        fn supervision_strategy() -> SupervisionStrategy {
+            SupervisionStrategy::Retry(
+                Strategy::FixedInterval(FixedIntervalStrategy::new(
+                    3, 
+                    Duration::from_millis(100)
+                ))
+            )
+        }        
     }
 
     #[tokio::test]
@@ -927,7 +920,7 @@ mod tests {
     async fn test_child_restart() {
         let token = CancellationToken::new();
         let mut system = System::new(Config::default(), token.clone());
-        let _ = system.create_actor(TestRestartParent, "parent").await.unwrap();  
+        let parent_ref = system.create_actor(TestRestartParent, "parent").await.unwrap();  
 
         // Retrieve the child actor reference .
         let child_ref = system
@@ -942,6 +935,20 @@ mod tests {
             "TestRestartParent received child error from /user/parent/child"
         ));
         assert!(logs_contain("Actor /user/parent/child received restart action."));
+        assert!(logs_contain("Actor /user/parent/child restarted."));
+        assert!(logs_contain("Prestarting actor /user/parent/child"));
+        assert!(logs_contain("Actor /user/parent/child started."));
+        assert!(logs_contain("Running actor /user/parent/child."));
+
+        // Check child in parent
+        let result = parent_ref.tell("Hello Child".to_owned()).await;
+        assert!(result.is_ok());
+         
+        // Stop the system
+        token.cancel();
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Wait for shutdown logs
+
     }
 
 }

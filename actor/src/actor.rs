@@ -58,7 +58,7 @@ pub trait Actor: Send + Sync + Sized + 'static {
     ///
     /// # Arguments
     ///
-    /// * `context` - The context of the actor.
+    /// * `ctx` - The context of the actor.
     ///
     /// # Returns
     ///
@@ -68,7 +68,8 @@ pub trait Actor: Send + Sync + Sized + 'static {
     ///
     /// Returns an error if the actor could not be started.
     ///
-    async fn pre_start(&mut self, _context: &mut ActorContext<Self>) -> Result<(), Error> {
+    async fn pre_start(&mut self, ctx: &mut ActorContext<Self>) -> Result<(), Error> {
+        debug!("Prestarting actor {}", ctx.path());
         Ok(())
     }
 
