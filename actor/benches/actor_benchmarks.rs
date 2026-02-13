@@ -15,10 +15,12 @@ use tokio_util::sync::CancellationToken;
 
 /// Creates a single-threaded Tokio runtime suitable for benchmarking.
 fn bench_runtime() -> Runtime {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .thread_name("actor-bench")
+        .thread_stack_size(3 * 1024 * 1024)
         .build()
-        .expect("Failed to create Tokio runtime")
+        .unwrap()
 }
 
 // ---------------------------------------------------------------------------

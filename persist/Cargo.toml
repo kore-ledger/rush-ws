@@ -1,0 +1,15 @@
+[package]
+name = "persist"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+actor = { path = "../actor" }
+rocksdb = { version = "0.24", optional = true }
+serde = { workspace = true, features = ["derive"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[features]
+default = ["rocksdb"]

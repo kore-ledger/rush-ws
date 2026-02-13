@@ -11,7 +11,7 @@ crossbeam = { workspace = true }
 futures = { workspace = true, features = ["async-await"]}
 serde = { workspace = true, features = ["derive"] }
 thiserror ={ workspace = true }
-tokio = { workspace = true, features = ["rt", "macros", "sync", "time"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 
