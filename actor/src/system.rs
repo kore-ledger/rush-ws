@@ -3,7 +3,7 @@
 //! This module provides the main actor system, responsible for
 //! managing actors, supervision and lifecycle signals.
 
-use crate::{Actor, ActorPath, ActorRef, Error, runner::ActorRunner};
+use crate::{Actor, ActorPath, ActorRef, runner::ActorRunner, Error};
 use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error};

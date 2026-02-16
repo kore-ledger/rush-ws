@@ -1,8 +1,8 @@
 //
 
-use super::{Collection, State, DbManager};
+use super::{Store, DbManager, IteratorOptions};
 use crate::Error;
-use rocksdb::{Options, DB, ColumnFamilyDescriptor};
+use rocksdb::{Options, DB, ColumnFamilyDescriptor, SliceTransform};
 
 use tracing::{debug, error};
 use std::{
@@ -80,6 +80,9 @@ impl RocksDbManager {
 
         options.create_if_missing(true);
 
+        // Set prefix extractor for column families to optimize prefix-based queries
+        options.set_prefix_extractor(SliceTransform::create_fixed_prefix(45));
+
         let cfs = match DB::list_cf(&options, path) {
             Ok(cf_names) => cf_names,
             Err(_) => vec!["default".to_string()], // Si la base de datos no existe, usamos solo `default`
@@ -100,6 +103,28 @@ impl RocksDbManager {
         Ok(Self {
             opts: options,
             db: Arc::new(db),
+        })
+    }
+}
+
+impl DbManager<RocksDbStore> for RocksDbManager {
+
+    fn create_store(&mut self, name: &str, prefix: &str) -> Result<RocksDbStore, Error> {
+        if self.db.cf_handle(name).is_none() {
+            // Use Arc::get_mut to access mutable DB reference
+            if let Some(db) = Arc::get_mut(&mut self.db) {
+                db.create_cf(name, &self.opts)
+                    .map_err(|e| Error::CreateStore(format!("{:?}", e)))?;
+            } else {
+                return Err(Error::CreateStore(
+                    "Cannot create column family: DB is shared".to_string(),
+                ));
+            }
+        }
+        Ok(RocksDbStore {
+            name: name.to_owned(),
+            prefix: prefix.to_owned(),
+            store: self.db.clone(),
         })
     }
 }
@@ -135,3 +160,59 @@ impl RocksDbStore {
     }
 }
 
+impl Store for RocksDbStore {
+    fn name(&self) -> &str {
+        self.name.as_str()
+    }
+
+    fn get(&self, key: u64) -> Result<Vec<u8>, Error> {
+        let full_key = format!("{}:{:014}", self.prefix, key);
+        match self.store.get(full_key.as_bytes()) {
+            Ok(Some(value)) => Ok(value),
+            Ok(None) => Err(Error::EntryNotFound(format!(
+                "Key not found: {}",
+                full_key
+            ))),
+            Err(e) => Err(Error::ReadingStore(format!(
+                "Failed to get key {}: {:?}",
+                full_key, e
+            ))),
+        }
+        
+    }
+
+    fn put(&mut self, key: &str, data: &[u8]) -> Result<(), Error> {
+        todo!()
+    }
+
+    fn del(&mut self, key: &str) -> Result<(), Error> {
+        todo!()
+    }
+
+    fn purge(&mut self) -> Result<(), Error> {
+        todo!()
+    }
+
+    fn last(&self) -> Option<(String, Vec<u8>)> {
+        todo!()
+    }
+
+    fn iter<'a>(
+        &'a self,
+        options: IteratorOptions,
+    ) -> Box<dyn Iterator<Item = (String, Vec<u8>)> + 'a> {
+        todo!()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_key_size() {
+        let key = "JqA4bewRn5H1dRDFBsZ9e1udwk28BUtUSHBwQ_BJYASA";
+        assert!(key.len() <= 255, "Key length exceeds 255 bytes");
+        println!("Key length: {}", key.len());
+    }   
+}
