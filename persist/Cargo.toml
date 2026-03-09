@@ -6,10 +6,20 @@ rust-version.workspace = true
 
 [dependencies]
 actor = { path = "../actor" }
+async-trait = { workspace = true }
+postcard = { workspace = true }
 rocksdb = { version = "0.24", optional = true }
-serde = { workspace = true, features = ["derive"] }
+serde = { workspace = true, default-features = false, features = ["derive"] }
+rusqlite = { version = "0.38.0", features = ["bundled"], optional = true}
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
+tokio-util = { workspace = true }
+
 [features]
-default = ["rocksdb"]
+default = ["sqlite", "memory"]
+sqlite = ["rusqlite"]
+memory = []

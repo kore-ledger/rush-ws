@@ -19,8 +19,7 @@ pub trait Snapshotter: Actor {
 
 pub enum SnapshotFilter {
     All,
-    IdRange { from: u64, to: u64 },
-    TimeStampRange { from: u64, to: u64 },    
+    Range { from: u64, to: u64 },  
 }
 
 pub trait State: Serialize + for<'de> Deserialize<'de> {}

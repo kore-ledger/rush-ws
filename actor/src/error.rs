@@ -24,4 +24,7 @@ pub enum Error {
     /// Supervision error.
     #[error("Supervision error: {0}")]
     Supervision(String),
+    /// Serialization error.
+    #[error("Serialization error: {0}")]
+    Serialization(String),
 }

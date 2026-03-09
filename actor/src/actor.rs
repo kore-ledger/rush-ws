@@ -10,7 +10,7 @@ use crate::{
     system::{ActorSignal, Config, SignalSender, Supervisor},
 };
 use async_trait::async_trait;
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{Serialize, Deserialize, de::DeserializeOwned};
 use std::fmt::Debug;
 use tokio::sync::broadcast::{Receiver as EventReceiver, Sender as EventSender};
 use tracing::{debug, error};
@@ -279,12 +279,12 @@ impl<A: Actor> ActorContext<A> {
     ///
     /// * `Result<Option<ActorRef<B>>, Error>` - The actor reference if found, or None.
     ///
-    pub async fn get_child<B>(&self, name: &str) -> Result<Option<ActorRef<B>>, Error>
+    pub async fn get_child<B>(&self, name: &str) -> Option<ActorRef<B>>
     where
         B: Actor,
     {
         let child_path = self.path.clone() / name;
-        self.actor_supervisor.get_actor(&child_path).await
+        self.actor_supervisor.get_actor(&child_path).await.unwrap_or_default()
     }
 
     /// Checks if a child actor exists by name.
@@ -497,6 +497,12 @@ where
         }
     }
 }
+
+/// Dummy event
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DummyEvent;
+
+impl Event for DummyEvent {}
 
 #[cfg(test)]
 mod tests {
