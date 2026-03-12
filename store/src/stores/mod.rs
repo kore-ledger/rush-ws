@@ -9,6 +9,9 @@
 #[cfg(test)]
 pub mod memory;
 
+#[cfg(feature = "fjall")]
+mod fjall;
+
 use crate::Error;
 
 /// A trait representing a store that creates collections and state storage.
