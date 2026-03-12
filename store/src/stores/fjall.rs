@@ -15,20 +15,23 @@ use super::{DbManager, Store, IteratorOptions};
 use crate::Error;
 
 use fjall::{Database, KeyspaceCreateOptions, Guard};
+use std::path::PathBuf;
 
 /// A database manager that creates Fjall stores. It's intended for production use and provides a 
 /// persistent storage solution.
 #[derive(Clone)]
 pub struct FjallDbManager {
+    path: PathBuf,
     db: Database,
 }
 
 impl FjallDbManager {
     /// Creates a new `FjallDbManager` with the specified database path.
     pub fn new(path: &str) -> Result<Self, Error> {
-        let db = Database::builder(path).open()
+        let path = PathBuf::from(&path);
+        let db = Database::builder(&path).open()
             .map_err(|e| Error::Store(format!("failed to open Fjall database -> {}", e)))?;
-        Ok(Self { db })
+        Ok(Self { path, db })
     }
 
 }
@@ -39,8 +42,14 @@ impl DbManager<FjallStore> for FjallDbManager {
         let keyspace = self.db.keyspace(name, || {
             KeyspaceCreateOptions::default()
         }) 
-            .map_err(|e| Error::Store(format!("failed to create fjallkeyspace -> {}", e)))?;
+            .map_err(|e| Error::Store(format!("failed to create fjall keyspace -> {}", e)))?;
         Ok(FjallStore { name: name.to_owned(), keyspace, prefix: prefix.to_owned() })
+    }
+
+    fn drop(self) -> Result<(), Error> {
+        std::fs::remove_dir_all(&self.path)
+            .map_err(|e| Error::Store(format!("failed to drop fjall database -> {}", e)))?;
+        Ok(())
     }
 }
 
@@ -87,7 +96,7 @@ impl Store for FjallStore {
         let value = value.map(|v| v.to_vec());
         match value {
             Some(v) => Ok(v),
-            None => Err(Error::Reading(format!("key not found in fjall -> {}", key))),
+            None => Err(Error::EntryNotFound(format!("Key not found: {}", key))),
         }
     }
 
@@ -203,16 +212,33 @@ mod tests {
         let binding = temp_dir.path().join("fjall_db");
         let path = binding.to_str().unwrap();
         let manager = FjallDbManager::new(path);
-        assert!(manager.is_ok());
+        let manager = manager.unwrap();
+        let store = manager.create_store("test", "test");
+        assert!(store.is_ok());
+    }
+
+    #[test]
+    fn test_fjall_store_put_get() {
+        //let manager = FjallDbManager::default();
+        let temp_dir = TempDir::new().unwrap();
+        let binding = temp_dir.path();
+        let path = binding.to_str().unwrap();
+        let manager = FjallDbManager::new(path);
+        let manager = manager.unwrap();
+
+        let mut store = manager.create_store("test", "test").unwrap();
+        store.put(1, b"hello").unwrap();
+        let value = store.get(1).unwrap();
+        assert_eq!(value, b"hello");
     }
 
     impl Default for FjallDbManager {
         fn default() -> Self {
-            let temp_dir = TempDir::new().unwrap();
-            let binding = temp_dir.path().join("fjall_db");
-            let path = binding.to_str().unwrap();
-            Self::new(path).unwrap()
-        }
+            let path = PathBuf::from("./db/fjall_db");
+    
+            Self::new(path.to_str().unwrap())
+                .expect("Failed to create FjallDbManager")
+       }
     } 
     test_store_trait!{
         unit_test_fjall_store:crate::stores::fjall::FjallDbManager:crate::stores::fjall::FjallStore

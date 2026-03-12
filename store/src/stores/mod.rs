@@ -55,7 +55,22 @@ pub trait DbManager<S: Store + 'static>: Sync + Send + Clone
     ///
     /// Returns an error if cleanup failed.
     ///
-    fn stop(self) -> Result<(), Error> {
+    fn stop(&self) -> Result<(), Error> {
+        Ok(())
+    }
+
+    /// Drops the store and performs cleanup. Default implementation does nothing. 
+    /// Override this to implement removing database.
+    /// 
+    /// # Returns
+    /// 
+    /// Returns Ok(()) if cleanup was successful.
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if cleanup failed.
+    /// 
+    fn drop(self) -> Result<(), Error> {
         Ok(())
     }
 }
@@ -180,25 +195,30 @@ macro_rules! test_store_trait {
             use $crate::error::Error;
 
             #[test]
+            #[serial_test::serial]
             fn test_create_store() {
                 let manager = <$type>::default();
                 let store: $type2 =
                     manager.create_store("test", "test").unwrap();
                 assert_eq!(Store::name(&store), "test");
-                assert!(manager.stop().is_ok())
+                assert!(manager.stop().is_ok());
+                assert!(manager.drop().is_ok());
             }
 
             #[test]
+            #[serial_test::serial]
             fn test_put_get_store() {
                 let manager = <$type>::default();
                 let mut store: $type2 =
                     manager.create_store("test", "test").unwrap();
                 Store::put(&mut store, 1, b"value").unwrap();
                 assert_eq!(Store::get(&store, 1).unwrap(), b"value");
-                assert!(manager.stop().is_ok())
+                assert!(manager.stop().is_ok());
+                assert!(manager.drop().is_ok());
             }
-
+            
             #[test]
+            #[serial_test::serial]
             fn test_del_store() {
                 let manager = <$type>::default();
                 let mut store: $type2 =
@@ -211,10 +231,12 @@ macro_rules! test_store_trait {
                         "Key not found: test:00000000000001".to_owned()
                     ))
                 );
-                assert!(manager.stop().is_ok())
+                assert!(manager.stop().is_ok());
+                assert!(manager.drop().is_ok());
             }
 
             #[test]
+            #[serial_test::serial]
             fn test_iter_reverse() {
                 let manager = <$type>::default();
                 let mut store1: $type2 =
@@ -263,10 +285,12 @@ macro_rules! test_store_trait {
                     Some((6, b"value6".to_vec()))
                 );
                 assert_eq!(iter2.next(), None);
-                assert!(manager.stop().is_ok())
+                assert!(manager.stop().is_ok());
+                assert!(manager.drop().is_ok());
             }
  
             #[test]
+            #[serial_test::serial]
             fn test_iter_forward() {
                 let manager = <$type>::default();
                 let mut store1: $type2 =
@@ -318,10 +342,12 @@ macro_rules! test_store_trait {
                     Some((6, b"value6".to_vec()))
                 );
                 assert_eq!(iter2.next(), None);
-                assert!(manager.stop().is_ok())
+                assert!(manager.stop().is_ok());
+                assert!(manager.drop().is_ok());
             }
 
             #[test]
+            #[serial_test::serial]
             fn test_iter_range() {
                 let manager = <$type>::default();
                 let mut store: $type2 =
@@ -345,10 +371,12 @@ macro_rules! test_store_trait {
                     Some((3, b"value3".to_vec()))
                 );
                 assert_eq!(iter.next(), None);
-                assert!(manager.stop().is_ok())
+                assert!(manager.stop().is_ok());
+                assert!(manager.drop().is_ok());
             }
 
             #[test]
+            #[serial_test::serial]
             fn test_last() {
                 let manager = <$type>::default();
                 let mut store: $type2 =
@@ -364,10 +392,12 @@ macro_rules! test_store_trait {
                     last,
                     Some((3, b"value3".to_vec()))
                 );
-                assert!(manager.stop().is_ok())
+                assert!(manager.stop().is_ok());
+                assert!(manager.drop().is_ok());
             }
 
             #[test]
+            #[serial_test::serial]
             fn test_purge() {
                 let manager = <$type>::default();
                 let mut store: $type2 =
@@ -391,10 +421,12 @@ macro_rules! test_store_trait {
                 let mut iter = store.iter(IteratorOptions::Forward { from: None, count: None });
                 assert_eq!(iter.next(), None);
                 
-                assert!(manager.stop().is_ok())
+                assert!(manager.stop().is_ok());
+                assert!(manager.drop().is_ok());
             }
 
             #[test]
+            #[serial_test::serial]
             fn test_flush() {
                 let manager = <$type>::default();
                 let mut store: $type2 =
@@ -403,7 +435,8 @@ macro_rules! test_store_trait {
                 Store::put(&mut store, 2, b"value2").unwrap();
                 Store::put(&mut store, 3, b"value3").unwrap();
                 assert!(store.flush().is_ok());
-                assert!(manager.stop().is_ok())
+                assert!(manager.stop().is_ok());
+                assert!(manager.drop().is_ok());
             }
         }
     };
