@@ -100,18 +100,38 @@ impl Store for MemoryStore {
         &'a self,
         options: IteratorOptions,
     ) -> Box<dyn Iterator<Item = (u64, Vec<u8>)> + 'a> {
-        /*let lock = self.data.read().unwrap();
+        let lock = self.data.read().unwrap();
         let size = lock.len() as u64;
         let iter: Box<dyn Iterator<Item = (u64, Vec<u8>)>> = match options {
             IteratorOptions::Forward { from, count } => {
-                let from = from.unwrap_or(0);
+                let mut from = from.unwrap_or(0);
                 let count = count.unwrap_or(size);
+                let key = format!("{}:{:014}", self.prefix, from); 
                 Box::new(
                     lock.iter()
                         .filter_map(move |(k, v)| {
-                            let key = k.split(':').last().unwrap().parse::<u64>().unwrap();
-                            if key >= from {
-                                Some((key, v.clone()))
+                            let rk = k.split(':').last().unwrap().parse::<u64>().unwrap();
+                            if k >= &key {
+                                Some((rk, v.clone()))
+                            } else {
+                                from += 1;
+                                None
+                            }
+                        })
+                        .take(count as usize),
+                )
+            },
+            IteratorOptions::Reverse { from, count } => {
+                let mut from = from.unwrap_or(0);
+                let count = count.unwrap_or(size);
+                let key = format!("{}:{:014}", self.prefix, from); 
+                Box::new(
+                    lock.iter()
+                        .rev()
+                        .filter_map(move |(k, v)| {
+                            let rk = k.split(':').last().unwrap().parse::<u64>().unwrap();
+                            if k <= &key {
+                                Some((rk, v.clone()))
                             } else {
                                 None
                             }
@@ -119,23 +139,10 @@ impl Store for MemoryStore {
                         .take(count as usize),
                 )
             },
-            IteratorOptions::Reverse { from, count } => Box::new(
-                lock.iter()
-                    .rev()
-                    .filter_map(move |(k, v)| {
-                        let key = k.split(':').last().unwrap().parse::<u64>().unwrap();
-                        if key <= from {
-                            Some((key, v.clone()))
-                        } else {
-                            None
-                        }
-                    })
-                    .take(count as usize),
-            ),
             IteratorOptions::Range { from, to } => Box::new(
                 lock.iter()
                     .filter_map(move |(k, v)| {
-                        let key = k.split('.').last().unwrap().parse::<u64>().unwrap();
+                        let key = k.split(':').last().unwrap().parse::<u64>().unwrap();
                         if key >= from && to.map_or(true, |t| key < t) {
                             Some((key, v.clone()))
                         } else {
@@ -143,7 +150,18 @@ impl Store for MemoryStore {
                         }
                     }),
             ),
-        };*/
-        unimplemented!()
+        };
+        iter
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::test_store_trait;
+
+    test_store_trait!{
+        unit_test_memory_store:crate::stores::memory::MemoryDbManager:crate::stores::memory::MemoryStore      
     }
 }
