@@ -9,13 +9,13 @@ resolver = "2"
 [workspace]
 members = [
     "actor",
-    "persist",
+    "store",
 ]
 
 [workspace.package]
 version = "0.6.5"
 edition = "2024"
-rust-version = "1.89.0"
+rust-version = "1.94.0"
 
 [workspace.dependencies]
 async-trait = { version = "0.1.89" }
