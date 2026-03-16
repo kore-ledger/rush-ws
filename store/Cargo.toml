@@ -20,5 +20,5 @@ tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync
 tokio-util = { workspace = true }
 
 [features]
-default = ["memory", "fjall"]
+default = ["memory"]
 memory = []

@@ -1,33 +1,48 @@
 //
 
-use crate::{PersistentActor, stores::{IteratorOptions, Store}};
-use actor::{Actor, DummyEvent, Error as ActorError, Event, Message, Response};
+use crate::{
+    PersistentActor, 
+    stores::{
+        IteratorOptions, Store,
+    },
+};
+#[cfg(feature = "fjall")]
+use crate::stores::fjall::FjallStore;
+#[cfg(feature = "memory")]
+use crate::stores::memory::MemoryStore;
+
+use actor::{Actor, ActorContext, ActorPath, DummyEvent, Error as ActorError, Event, Message, Response};
 use serde_bare::{to_vec, from_slice};
 use async_trait::async_trait;
 use tracing::{error, debug};
+
+#[cfg(feature = "memory")]
+pub type Journal = BaseJournal<MemoryStore>;
+
+#[cfg(feature = "fjall")]
+pub type Journal = BaseJournal<FjallStore>;
 
 /// A journal that stores events for an event-sourced actor. The journal is responsible for
 /// persisting events and providing them to the actor when it needs to replay its state. The 
 /// journal also keeps track of the latest sequence number for the events, allowing actors 
 /// to know up to which point they have replayed.
-pub struct Journal<S: Store> {
+pub struct BaseJournal<S: Store> {
     /// The underlying store used for persisting events.
     store: S,
     /// The latest sequence number of the events.
     latest_sequence: u64,    
 }
 
-impl<S: Store> Journal<S> {
+impl<S: Store, A: PersistentActor> BaseJournal<S> {
     /// Creates a new journal with the given store.
     /// 
     /// # Arguments
     /// 
-    /// * `name` - A string slice that holds the name of the journal.
     /// * `store` - An instance of a store that implements the `Store` trait
     /// 
     /// # Returns
     /// 
-    /// A new instance of `Journal` initialized with the provided name and store, and the latest
+    /// A new instance of `BaseJournal` initialized with the provided store, and the latest
     /// sequence set to 0.
     /// 
     pub fn new(store: S) -> Self {
@@ -56,7 +71,7 @@ impl<S: Store> Journal<S> {
     /// A `Result` indicating whether the data was successfully persisted or if an error occurred.
     /// On success, it returns `Ok(())`. On failure, it returns an `ActorError` with a message 
     /// describing the error.
-    pub fn put<A: PersistentActor>(&mut self, data: A::Event) -> Result<(), ActorError> {
+    pub fn put(&mut self, data: A::Event) -> Result<(), ActorError> {
         self.latest_sequence += 1;
         let binary = to_vec(&data)
             .map_err(|e| ActorError::Serialization(
@@ -81,7 +96,7 @@ impl<S: Store> Journal<S> {
     /// the retrieval fails. On success, it returns `Ok(Vec<u8>)` with the data. On failure, it 
     /// returns an `ActorError` with a message describing the error.
     /// 
-    pub fn get<A: PersistentActor>(&self, sequence: u64) -> Result<A::Event, ActorError> {
+    pub fn get(&self, sequence: u64) -> Result<A::Event, ActorError> {
         let data = self.store.get(sequence)
             .map_err(|e| ActorError::Store(
                 format!("Failed to retrieve event: {}", e))
@@ -101,9 +116,68 @@ impl<S: Store> Journal<S> {
     /// success, it returns `Ok(Some((u64, Vec<u8>)))` with the sequence number and data of the
     /// latest event. If no events are present, it returns `Ok(None)`. On failure, it returns an
     /// `ActorError` with a message describing the error.
-    pub fn last<A: PersistentActor>(&self) -> Option<(u64, A::Event)> {
+    pub fn last(&self) -> Option<(u64, A::Event)> {
         self.get(self.latest_sequence).ok()
             .map(|event| (self.latest_sequence, event))
+    }
+}
+
+pub enum JournalMessage<A: PersistentActor> {
+    Put(A::Event),
+    Get(u64),
+    Last,
+    Range(u64, u64),
+}
+
+impl<A: PersistentActor> Message for JournalMessage<A> {}
+
+pub enum JournalResponse<A: PersistentActor> {
+    Event(A::Event),
+    Events(Vec<(u64, A::Event)>),
+    NotFound,
+}
+
+impl<A: PersistentActor> Response for JournalResponse<A> {}
+
+#[async_trait]
+impl<S: Store, A: PersistentActor> Actor for BaseJournal<S> {
+    type Message = JournalMessage<A>;
+    type Response = JournalResponse<A>;
+    type Event = DummyEvent;
+
+    async fn handle(
+        &mut self, 
+        ctx: &mut ActorContext<Self>,
+        sender: &ActorPath,
+        msg: Self::Message,
+    ) -> Result<Self::Response, ActorError> {
+        match msg {
+            JournalMessage::Put(event) => {
+                match self.put(event) {
+                    Ok(_) => Ok(JournalResponse::NotFound),
+                    Err(e) => Err(ActorError::Store(
+                        format!("Failed to put event in journal: {}", e)
+                    )),
+                }
+            },
+            JournalMessage::Get(sequence) => {
+                match self.get(sequence) {
+                    Ok(event) => Ok(JournalResponse::Event(event)),
+                    Err(e) => Err(ActorError::Store(
+                        format!("Failed to get event from journal: {}", e)
+                    )),
+                }
+            },
+            JournalMessage::Last => {
+                match self.last() {
+                    Some((seq, event)) => Ok(JournalResponse::Event(event)),
+                    None => Ok(JournalResponse::NotFound),
+                }
+            },
+            JournalMessage::Range(_, _) => {
+                unimplemented!()
+            },
+        }
     }
 }
 
@@ -121,10 +195,8 @@ mod tests {
     fn test_journal_memory() {
         let manager = MemoryDbManager::default();
         let store = manager.create_store("test_journal", "event").unwrap();
-        let journal = Journal::new(store);
-
-
-    }
+        let mut journal = BaseJournal::new(store);
+     }
 
     #[test]
     #[cfg(feature = "fjall")]
@@ -132,7 +204,7 @@ mod tests {
     fn test_journal_fjall() {
         let manager = FjallDbManager::default();
         let store = manager.create_store("test_journal_fjall", "event").unwrap();
-        let journal = Journal::new(store);
+        let journal = BaseJournal::new(store);
 
     }
 }

@@ -6,13 +6,26 @@
 //! the operations for storing and retrieving key-value pairs.
 //! 
 
-#[cfg(test)]
+#[cfg(feature = "memory")]
 pub(crate) mod memory;
+
 
 #[cfg(feature = "fjall")]
 pub(crate) mod fjall;
 
+#[cfg(feature = "memory")]
+pub use memory::{MemoryDbManager, MemoryStore};
+
+#[cfg(feature = "fjall")]
+pub use fjall::{FjallDbManager, FjallStore};
+
 use crate::Error;
+
+#[cfg(feature = "memory")]
+type DB = MemoryDbManager;
+
+#[cfg(feature = "fjall")]
+type DB = FjallDbManager;
 
 /// A trait representing a store that creates collections and state storage.
 /// Implementations of this trait provide the factory methods for creating
