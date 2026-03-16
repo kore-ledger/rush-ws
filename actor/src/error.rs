@@ -27,4 +27,10 @@ pub enum Error {
     /// Serialization error.
     #[error("Serialization error: {0}")]
     Serialization(String),
+    /// Deserialization error.
+    #[error("Deserialization error: {0}")]
+    Deserialization(String),
+    /// Store error.
+    #[error("Store error: {0}")]
+    Store(String),
 }
