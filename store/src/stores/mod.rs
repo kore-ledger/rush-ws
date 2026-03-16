@@ -14,18 +14,18 @@ pub(crate) mod memory;
 pub(crate) mod fjall;
 
 #[cfg(feature = "memory")]
-pub use memory::{MemoryDbManager, MemoryStore};
+pub use memory::MemoryDbManager;
 
 #[cfg(feature = "fjall")]
-pub use fjall::{FjallDbManager, FjallStore};
+pub use fjall::FjallDbManager;
 
 use crate::Error;
 
 #[cfg(feature = "memory")]
-type DB = MemoryDbManager;
+pub type StoreManager = MemoryDbManager;
 
 #[cfg(feature = "fjall")]
-type DB = FjallDbManager;
+pub type StoreManager = FjallDbManager;
 
 /// A trait representing a store that creates collections and state storage.
 /// Implementations of this trait provide the factory methods for creating

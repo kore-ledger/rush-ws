@@ -177,6 +177,43 @@ impl System {
         debug!("System stopped all actors.");
         self.system_supervisor.stop_children().await
     }
+
+    /// Adds a helper object to the actor system.
+    /// Helpers are shared objects (like database pools, configurations, etc.)
+    /// that actors can retrieve by name. This enables dependency injection
+    /// for actors without tight coupling.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Unique identifier for this helper.
+    /// * `helper` - The helper object to store (must be Clone + Send + Sync).
+    ///
+    pub async fn add_helper<H>(&self, name: &str, helper: H)
+    where
+        H: Any + Send + Sync + Clone + 'static,
+    {
+        self.system_supervisor.add_helper(name, helper).await;
+    }
+
+    /// Retrieves a helper object from the actor system.
+    /// Actors can use this to access shared resources like database
+    /// connections, configuration, or other services.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The identifier of the helper to retrieve.
+    ///
+    /// # Returns
+    ///
+    /// Returns Some(helper) if found and type matches, None otherwise.
+    ///
+    pub async fn get_helper<H>(&self, name: &str) -> Option<H>
+    where
+        H: Any + Send + Sync + Clone + 'static,
+    {
+        self.system_supervisor.get_helper(name).await
+    }
+    
 }
 
 /// Runner for the actor system to handle signals and lifecycle events.
@@ -233,6 +270,8 @@ impl SystemRunner {
 
 /// Type alias for the actor registry.
 pub type ActorRegistry = Arc<RwLock<HashMap<ActorPath, Box<dyn Any + Send + Sync + 'static>>>>;
+/// Type alias for the helpers registry.
+pub type HelpersRegistry = Arc<RwLock<HashMap<String, Box<dyn Any + Send + Sync + 'static>>>>;
 /// Type alias for action senders registry.
 pub type ActionSendersRegistry = Arc<RwLock<HashMap<ActorPath, ActionSender>>>;
 
@@ -242,6 +281,8 @@ pub type ActionSendersRegistry = Arc<RwLock<HashMap<ActorPath, ActionSender>>>;
 pub struct Supervisor {
     /// The actor registry for managing child actors.
     registry: ActorRegistry,
+    /// The helpers registry for managing actor helpers.
+    helpers: HelpersRegistry,
     /// The action senders registry for managing child actors.
     action_senders: ActionSendersRegistry,
     /// The signal sender to share with child actors.
@@ -261,10 +302,12 @@ impl Supervisor {
     /// * `Supervisor` - The newly created supervision handler.
     ///
     pub fn new(registry: ActorRegistry, child_signal_sender: SignalSender) -> Self {
+        let helpers = Arc::new(RwLock::new(HashMap::new()));
         Self {
             action_senders: Arc::new(RwLock::new(HashMap::new())),
             child_signal_sender,
             registry,
+            helpers,
         }
     }
 
@@ -417,6 +460,48 @@ impl Supervisor {
         }
         Ok(())
     }
+
+    /// Adds a helper object to the actor system.
+    /// Helpers are shared objects (like database pools, configurations, etc.)
+    /// that actors can retrieve by name. This enables dependency injection
+    /// for actors without tight coupling.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Unique identifier for this helper.
+    /// * `helper` - The helper object to store (must be Clone + Send + Sync).
+    ///
+    pub async fn add_helper<H>(&self, name: &str, helper: H)
+    where
+        H: Any + Send + Sync + Clone + 'static,
+    {
+        let mut helpers = self.helpers.write().await;
+        helpers.insert(name.to_owned(), Box::new(helper));
+    }
+
+    /// Retrieves a helper object from the actor system.
+    /// Actors can use this to access shared resources like database
+    /// connections, configuration, or other services.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The identifier of the helper to retrieve.
+    ///
+    /// # Returns
+    ///
+    /// Returns Some(helper) if found and type matches, None otherwise.
+    ///
+    pub async fn get_helper<H>(&self, name: &str) -> Option<H>
+    where
+        H: Any + Send + Sync + Clone + 'static,
+    {
+        let helpers = self.helpers.read().await;
+        helpers
+            .get(name)
+            .and_then(|any| any.downcast_ref::<H>())
+            .cloned()
+    }
+
 }
 
 /// Default implementation for Supervisor with an empty registry and a dummy signal sender.
