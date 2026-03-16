@@ -7,10 +7,10 @@
 //! 
 
 #[cfg(test)]
-pub mod memory;
+pub(crate) mod memory;
 
 #[cfg(feature = "fjall")]
-mod fjall;
+pub(crate) mod fjall;
 
 use crate::Error;
 
@@ -22,7 +22,7 @@ use crate::Error;
 ///
 /// * `S` - The store type that stores key-value pairs (events).
 ///
-pub trait DbManager<S: Store + 'static>: Sync + Send + Clone
+pub trait  DbManager<S: Store + 'static>: Sync + Send + Clone
 {
     /// Creates a new store for storing key-value pairs (typically events).
     /// Stores are used for event sourcing where multiple events

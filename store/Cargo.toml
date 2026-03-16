@@ -9,6 +9,7 @@ actor = { path = "../actor" }
 async-trait = { workspace = true }
 fjall = { version= "3.1.0", optional = true }
 serde = { workspace = true, default-features = false, features = ["derive"] }
+serde_bare = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 

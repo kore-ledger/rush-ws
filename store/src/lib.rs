@@ -8,6 +8,10 @@
 
 mod error;
 mod journal;
+mod persist;
 mod stores;
 
 pub use error::Error;
+pub use persist::PersistentActor;
+pub use journal::Journal;
+pub use stores::Store;
