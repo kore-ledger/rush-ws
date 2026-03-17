@@ -11,7 +11,10 @@ use crate::{
 };
 use async_trait::async_trait;
 use serde::{Serialize, Deserialize, de::DeserializeOwned};
-use std::fmt::Debug;
+use std::{
+    any::Any,
+    fmt::Debug
+};
 use tokio::sync::broadcast::{Receiver as EventReceiver, Sender as EventSender};
 use tracing::{debug, error};
 
@@ -395,6 +398,26 @@ impl<A: Actor> ActorContext<A> {
             Ok(())
         }
     }
+
+    /// Retrieves a helper object from the actor system.
+    /// Actors can use this to access shared resources like database
+    /// connections, configuration, or other services.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The identifier of the helper to retrieve.
+    ///
+    /// # Returns
+    ///
+    /// Returns Some(helper) if found and type matches, None otherwise.
+    ///
+    pub async fn get_helper<H>(&self, name: &str) -> Option<H>
+    where
+        H: Any + Send + Sync + Clone + 'static,
+    {
+        self.actor_supervisor.get_helper(name).await
+    }
+
 }
 
 /// Actor reference.

@@ -16,7 +16,7 @@ pub use error::Error;
 pub use persist::PersistentActor;
 pub use journal::{Journal, JournalMessage, JournalResponse};
 pub use stores::Store;
-pub use snapshotter::Snapshotter;
+pub use snapshotter::{Snapshotter, SnapshotMessage, SnapshotResponse};
 
 #[cfg(all(feature = "fjall", feature = "memory"))]
 compile_error!("feature \"fjall\" and feature \"memory\" cannot be enabled at the same time");
