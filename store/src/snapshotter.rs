@@ -134,6 +134,7 @@ mod tests {
             panic!("Failed to load last snapshot");
         }
 
+        assert!(manager.drop().is_ok());       
     }
 }
     
