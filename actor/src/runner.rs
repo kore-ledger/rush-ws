@@ -9,7 +9,8 @@ use crate::{
     supervision::{RetryStrategy, SupervisionStrategy},
     system::{
         ActionReceiver, ActionSender, ActorRegistry, ActorSignal, ChildAction, Config,
-        SignalReceiver, SignalSender, Supervisor, action_channel, signal_channel,
+        SignalReceiver, SignalSender, Supervisor, HelpersRegistry,
+        action_channel, signal_channel,
     },
 };
 
@@ -49,6 +50,7 @@ where
         actor_path: ActorPath,
         signal_sender: Option<SignalSender>,
         registry: ActorRegistry,
+        helpers: HelpersRegistry,
         conf: &Config,
     ) -> (Self, ActorRef<A>, ActionSender) {
         let (sender, receiver) = mailbox::<A>(conf.mailbox_size);
@@ -56,7 +58,7 @@ where
         let handler = HandlerHelper::new(sender);
         let (child_signal_sender, signal_receiver) = signal_channel(conf.signal_buffer_size);
         let (action_sender, action_receiver) = action_channel(conf.action_buffer_size);
-        let system_handler = Supervisor::new(registry, child_signal_sender.clone());
+        let system_handler = Supervisor::new(registry, helpers, child_signal_sender.clone());
         let context = ActorContext::new(
             actor_path.clone(),
             system_handler,
@@ -332,9 +334,10 @@ mod tests {
         let actor = TestActor;
         let actor_path = ActorPath::from("test_actor");
         let registry: ActorRegistry = Arc::new(RwLock::new(HashMap::new()));
+        let helpers = Arc::new(RwLock::new(HashMap::new()));
         let conf = Config::default();
         let (mut runner, actor_ref, _action_sender) =
-            ActorRunner::new(actor, actor_path, None, registry, &conf);
+            ActorRunner::new(actor, actor_path, None, registry, helpers, &conf);
 
         // Initialize the actor runner.
         let (init_sender, init_receiver) = oneshot::channel();
@@ -373,8 +376,9 @@ mod tests {
         let actor_path = ActorPath::from("msg_handler");
         let registry: ActorRegistry = Arc::new(RwLock::new(HashMap::new()));
         let conf = Config::default();
+        let helpers = Arc::new(RwLock::new(HashMap::new()));
         let (mut runner, actor_ref, _action_sender) =
-            ActorRunner::new(actor, actor_path, None, registry, &conf);
+            ActorRunner::new(actor, actor_path, None, registry, helpers, &conf);
 
         let (init_sender, init_receiver) = oneshot::channel();
         tokio::spawn(async move {
@@ -394,9 +398,10 @@ mod tests {
         let actor = TestActor;
         let actor_path = ActorPath::from("stop_actor");
         let registry: ActorRegistry = Arc::new(RwLock::new(HashMap::new()));
+        let helpers = Arc::new(RwLock::new(HashMap::new()));
         let conf = Config::default();
         let (mut runner, _actor_ref, action_sender) =
-            ActorRunner::new(actor, actor_path, None, registry, &conf);
+            ActorRunner::new(actor, actor_path, None, registry, helpers, &conf);
 
         let (init_sender, init_receiver) = oneshot::channel();
         let runner_handle = tokio::spawn(async move {
@@ -467,9 +472,10 @@ mod tests {
         let actor = TestRestartActor::new(true);
         let actor_path = ActorPath::from("restart_actor");
         let registry: ActorRegistry = Arc::new(RwLock::new(HashMap::new()));
+        let helpers = Arc::new(RwLock::new(HashMap::new()));
         let conf = Config::default();
         let (mut runner, _actor_ref, _action_sender) =
-            ActorRunner::new(actor, actor_path, None, registry, &conf);
+            ActorRunner::new(actor, actor_path, None, registry, helpers, &conf);
 
         let (init_sender, init_receiver) = oneshot::channel();
         tokio::spawn(async move {
@@ -490,9 +496,10 @@ mod tests {
         let actor = TestRestartActor::new(false);
         let actor_path = ActorPath::from("restart_actor");
         let registry: ActorRegistry = Arc::new(RwLock::new(HashMap::new()));
+        let helpers = Arc::new(RwLock::new(HashMap::new()));
         let conf = Config::default();
         let (mut runner, _actor_ref, _action_sender) =
-            ActorRunner::new(actor, actor_path, None, registry, &conf);
+            ActorRunner::new(actor, actor_path, None, registry, helpers, &conf);
 
         let (init_sender, init_receiver) = oneshot::channel();
         tokio::spawn(async move {

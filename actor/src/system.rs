@@ -77,7 +77,8 @@ impl System {
         let registry: ActorRegistry = Arc::new(RwLock::new(HashMap::new()));
         let (child_signal_sender, child_signal_receiver) =
             signal_channel(config.signal_buffer_size);
-        let system_supervisor = Supervisor::new(registry, child_signal_sender);
+        let helpers = Arc::new(RwLock::new(HashMap::new()));
+        let system_supervisor = Supervisor::new(registry, helpers, child_signal_sender);
         let root_path = ActorPath::from("/user");
         let system = System {
             system_supervisor,
@@ -295,14 +296,17 @@ impl Supervisor {
     /// # Arguments
     ///
     /// * `registry` - The actor registry for managing child actors.
+    /// * `helpers` - The helpers registry for managing actor helpers.
     /// * `child_signal_sender` - The signal sender for child actors.
     ///
     /// # Returns
     ///
     /// * `Supervisor` - The newly created supervision handler.
     ///
-    pub fn new(registry: ActorRegistry, child_signal_sender: SignalSender) -> Self {
-        let helpers = Arc::new(RwLock::new(HashMap::new()));
+    pub fn new(
+        registry: ActorRegistry,
+        helpers: HelpersRegistry, 
+        child_signal_sender: SignalSender) -> Self {
         Self {
             action_senders: Arc::new(RwLock::new(HashMap::new())),
             child_signal_sender,
@@ -345,6 +349,7 @@ impl Supervisor {
             path.clone(),
             Some(self.child_signal_sender.clone()),
             self.registry.clone(),
+            self.helpers.clone(),
             conf,
         );
 
@@ -508,8 +513,9 @@ impl Supervisor {
 impl Default for Supervisor {
     fn default() -> Self {
         let registry: ActorRegistry = Arc::new(RwLock::new(HashMap::new()));
+        let helpers = Arc::new(RwLock::new(HashMap::new()));
         let (child_signal_sender, _child_signal_receiver) = signal_channel(10);
-        Supervisor::new(registry, child_signal_sender)
+        Supervisor::new(registry, helpers, child_signal_sender)
     }
 }
 
