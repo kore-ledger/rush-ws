@@ -18,5 +18,11 @@ pub use journal::{Journal, JournalMessage, JournalResponse};
 pub use stores::Store;
 pub use snapshotter::{Snapshotter, SnapshotMessage, SnapshotResponse};
 
+#[cfg(feature = "fjall")]
+pub use stores::fjall::FjallDbManager;
+
+#[cfg(feature = "memory")]
+pub use stores::memory::MemoryDbManager;
+
 #[cfg(all(feature = "fjall", feature = "memory"))]
 compile_error!("feature \"fjall\" and feature \"memory\" cannot be enabled at the same time");

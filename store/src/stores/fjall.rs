@@ -70,7 +70,7 @@ impl FjallStore {
                 format!("failed to read key/value from fjall -> {}", e)
             ))?;
         let key_str = String::from_utf8_lossy(&key);
-        let key_num = key_str.split(':').last()
+        let key_num = key_str.split(':').next_back()
             .and_then(|s| s.parse::<u64>().ok())
             .ok_or_else(|| Error::Reading(
                 format!("failed to parse key from fjall -> {}", key_str)
@@ -88,7 +88,7 @@ impl FjallStore {
     /// # Returns
     /// 
     /// - `u64`: The last key in the store that matches the prefix, or 0 if there are no matching 
-    ///    keys.
+    ///   keys.
     pub fn last_key(&self) -> u64 {
         let iter = self.keyspace.prefix(&self.prefix);
         iter.last()

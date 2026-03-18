@@ -67,12 +67,12 @@ impl<S: Store> BaseJournal<S> {
     /// describing the error.
     pub fn put(&mut self, data: &[u8]) -> Result<(), ActorError> {
         self.latest_sequence += 1;
-        Ok(self.store.put(self.latest_sequence, data)
+        self.store.put(self.latest_sequence, data)
             .map_err(|e| {
                 error!("Failed to store event in journal: {}", e);
                 ActorError::Store(
                     format!("Failed to store event: {}", e))
-            })?)
+            })
     }
 
     /// Retrieves data from the journal for a specific sequence number. This method allows actors
