@@ -16,20 +16,62 @@ pub type Snapshotter = BaseSnapshotter<MemoryStore>;
 #[cfg(feature = "fjall")]
 pub type Snapshotter = BaseSnapshotter<FjallStore>;
 
+/// A snapshotter that stores snapshots for an event-sourced actor. The snapshotter is responsible 
+/// for managing the persistence of snapshots, allowing actors to recover their state efficiently.
+/// The snapshotter provides methods for saving and loading snapshots, as well as retrieving the 
+/// last snapshot stored.
+/// 
 pub struct BaseSnapshotter<S: Store> {
+    /// The underlying store used for persisting snapshots.
     store: S,    
 }
 
 impl<S: Store> BaseSnapshotter<S> {
+    /// Create a new snapshotter with the given store.
+    /// 
+    /// # Arguments
+    /// 
+    /// * `store` - The underlying store used for persisting snapshots.
+    /// 
+    /// # Returns
+    /// 
+    /// * `Self` - A new instance of the snapshotter.
+    ///
     pub fn new(store: S) -> Self {
         Self { store }
     }
 
+    /// Saves a snapshot in the snapshotter by storing it in the underlying store. This method is
+    /// used to save the state of an actor at a specific point in time, allowing for efficient 
+    /// recovery later.
+    /// 
+    /// # Arguments
+    /// 
+    /// * `key` - A unique identifier for the snapshot, typically representing the sequence number or version of the snapshot.
+    /// * `data` - The serialized data of the snapshot to be stored.
+    /// 
+    /// # Returns
+    /// 
+    /// * `Result<(), ActorError>` - Ok if the snapshot was saved successfully, or an error if there was a problem during saving.
+    ///
     pub fn save_snapshot(&mut self, key: u64, data: Vec<u8>) -> Result<(), ActorError> {
         self.store.put(key, &data)
             .map_err(|e| ActorError::Store(format!("Failed to save snapshot: {}", e)))
     }
 
+    /// Loads a snapshot from the snapshotter by retrieving it from the underlying store. This method is
+    /// used to load the state of an actor at a specific point in time, allowing for efficient 
+    /// recovery.
+    /// 
+    /// # Arguments
+    /// 
+    /// * `key` - A unique identifier for the snapshot, typically representing the sequence number or version of the snapshot.
+    /// 
+    /// # Returns
+    /// 
+    /// * `Option<Vec<u8>>` - Some with the snapshot data if found, or None if the snapshot was not found or there was an 
+    ///   error during loading.
+    ///
     pub fn load_snapshot(&self, key: u64) -> Option<Vec<u8>> {
         match self.store.get(key) {
             Ok(data) => Some(data),
@@ -40,23 +82,44 @@ impl<S: Store> BaseSnapshotter<S> {
         }
     }
 
+    /// Retrieves the last snapshot stored in the snapshotter. This method is used to get the most
+    /// recent snapshot, allowing for efficient recovery of the actor's state.
+    /// 
+    /// # Returns
+    /// 
+    /// * `Option<(u64, Vec<u8>)>` - Some with the key and snapshot data if found, or None if no 
+    ///   snapshot was found or there was an error during retrieval.
+    ///
     pub fn last_snapshot(&self) -> Option<(u64, Vec<u8>)> {
         self.store.last()
     }
 
 }
 
+/// A message type for interacting with the snapshotter actor. This enum defines the different
+/// types of messages that can be sent to the snapshotter, including saving a snapshot, loading
+/// a snapshot, and retrieving the last snapshot.
+///
 pub enum SnapshotMessage {
+    /// A message to save a snapshot, containing the key and data of the snapshot to be saved.
     SaveSnapshot { key: u64, data: Vec<u8> },
+    /// A message to load a snapshot, containing the key of the snapshot to be loaded.
     LoadSnapshot { key: u64 },
+    /// A message to retrieve the last snapshot stored in the snapshotter.
     LastSnapshot,
 }
 
 impl Message for SnapshotMessage {}
 
+/// A response type for the snapshotter actor. This enum defines the different types of responses 
+/// that can be sent by the snapshotter in reply to messages.
+/// 
 pub enum SnapshotResponse {
+    /// A response containing the result of a load snapshot request.
     LoadResult(Option<Vec<u8>>),
+    /// A response containing the result of a last snapshot request.
     LastResult(Option<(u64, Vec<u8>)>),
+    /// A response indicating that no specific result is available.
     None,
 }
 
@@ -90,6 +153,14 @@ impl<S: Store> Actor for BaseSnapshotter<S> {
                 Ok(SnapshotResponse::LastResult(result))
             },
         }
+    }
+
+    async fn post_stop(&mut self, _ctx: &mut ActorContext<Self>) -> Result<(), ActorError> {
+        self.store.flush()
+            .map_err(|e| {
+                error!("Failed to flush store on snapshotter shutdown: {}", e);
+                ActorError::Store(format!("Failed to flush store on snapshotter shutdown: {}", e))
+            })
     }
     
 }

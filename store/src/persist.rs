@@ -10,6 +10,7 @@ use actor::{Actor, ActorContext, ActorRef, Error as ActorError};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_bare::{to_vec, from_slice};
 use async_trait::async_trait;
+use tracing::{debug, error};
 
 /// A trait for actors that can persist their state using a journal and snapshotter.
 /// Actors implementing this trait must define an associated type `Event` that represents the 
@@ -21,6 +22,29 @@ use async_trait::async_trait;
 /// method is responsible for creating the necessary stores for the journal and snapshotter.
 #[async_trait]
 pub trait PersistentActor: Actor + Serialize + DeserializeOwned {
+
+    /// Get the type name of the actor, used for creating stores. This method is used to 
+    /// determine the name of the stores for the journal and snapshotter, allowing different 
+    /// actor types to have their own separate stores.
+    /// 
+    /// # Returns
+    /// 
+    /// * `&'static str` - The type name of the actor, used for creating stores.
+    ///
+    fn type_name() -> &'static str where Self: Sized {
+        let type_name = std::any::type_name::<Self>();
+        type_name.rsplit("::").next().unwrap_or(type_name)
+    }
+
+    /// Get a unique identifier for the actor instance, used for creating stores. This method is
+    /// used to determine the prefix of the stores for the journal and snapshotter, allowing 
+    /// different actor instances to have their own separate stores.
+    /// 
+    /// # Returns
+    /// 
+    /// * `String` - A unique identifier for the actor instance, used for creating stores.
+    ///
+    fn id(&self) -> String;
 
     /// Apply an event to the actor's state. 
     /// 
@@ -54,11 +78,9 @@ pub trait PersistentActor: Actor + Serialize + DeserializeOwned {
     ///
     async fn init_state (
         &mut self, 
-        name: &str, 
-        prefix: &str, 
         ctx: &mut ActorContext<Self>
     ) -> Result<(), ActorError> {
-        self.create_stores(name, prefix, ctx).await?;
+        self.create_stores(ctx).await?;
         let mut from = 0_u64;
         let state = self.snapshotter(ctx).await
             .ok_or_else(|| ActorError::Store("Snapshotter not found".to_string()))?
@@ -101,15 +123,13 @@ pub trait PersistentActor: Actor + Serialize + DeserializeOwned {
     ///
     async fn create_stores(
         &mut self,
-        name: &str,
-        prefix: &str,
         ctx: &mut ActorContext<Self>
     ) -> Result<(), ActorError> {
-        let store_manager = ctx.get_helper::<StoreManager>("db_manager").await
+        let store_manager = ctx.get_helper::<StoreManager>("storage").await
             .ok_or_else(|| ActorError::Store("DB Manager not found".to_string()))?;
-        let journal_store = store_manager.create_store(name, prefix)
+        let journal_store = store_manager.create_store(Self::type_name(), &self.id())
             .map_err(|e| ActorError::Store(format!("Failed to create journal store: {}", e)))?;
-        let snapshotter_store = store_manager.create_store(name, prefix)
+        let snapshotter_store = store_manager.create_store(Self::type_name(), &self.id())
             .map_err(|e| ActorError::Store(format!("Failed to create snapshotter store: {}", e)))?;
         ctx.create_child(Journal::new(journal_store), "journal").await
             .map_err(|e| ActorError::Store(format!("Failed to create journal actor: {}", e)))?;
@@ -165,9 +185,16 @@ pub trait PersistentActor: Actor + Serialize + DeserializeOwned {
             .map_err(|e| ActorError::Serialization(format!("Failed to serialize event: {}", e)))?;
         if let Some(journal) = self.journal(ctx).await {
             journal.tell(JournalMessage::Put(serialized_event)).await
-                .map_err(|e| ActorError::Store(format!("Failed to send event to journal: {}", e)))?;
+                .map_err(|e| {
+                    error!("Failed to send event to journal: {}", e);
+                    ActorError::Store(format!("Failed to send event to journal: {}", e))
+                })?;
+            debug!("Persisted event to journal");
+            self.apply_event(event).await?;
+            debug!("Applied event to state");
             Ok(())
         } else {
+            error!("Journal actor not found, failed to persist event");
             Err(ActorError::Store("Journal not found".to_string()))
         }
     }
@@ -178,13 +205,16 @@ mod tests {
 
     use super::*;
     use actor::{
-        Actor, ActorContext, ActorRef, ActorPath, System, Config,
+        Actor, ActorContext, ActorPath, System, Config,
         Event, Message, Response, Error as ActorError
     };
     use serde::Deserialize;
     use tokio_util::sync::CancellationToken;
 
-    pub struct TestMessage(String);
+     enum TestMessage {
+        Add(String),
+        GetAll,
+    }
 
     impl Message for TestMessage {}
     
@@ -195,9 +225,12 @@ mod tests {
 
     impl Event for TestEvent {}
 
-    struct DummyResponse;
+    enum TestResponse {
+        All(Vec<String>),
+        None,
+    }
 
-    impl Response for DummyResponse {}
+    impl Response for TestResponse {}
 
     #[derive(Clone, Debug, Serialize, Deserialize)]
     struct TestActor {
@@ -207,14 +240,14 @@ mod tests {
     #[async_trait]
     impl Actor for TestActor {
         type Message = TestMessage;
-        type Response = DummyResponse;
+        type Response = TestResponse;
         type Event = TestEvent;
 
         async fn pre_start(
             &mut self, ctx: 
             &mut ActorContext<Self>
         ) -> Result<(), ActorError> {
-            self.init_state("TestActor", "test_actor", ctx).await
+            self.init_state(ctx).await
         }
 
         async fn handle(
@@ -223,9 +256,16 @@ mod tests {
             _sender: &ActorPath,
             msg: Self::Message,
         ) -> Result<Self::Response, ActorError> {
-            let event = TestEvent { value: msg.0 };
-            self.apply_event(&event).await?;
-            Ok(DummyResponse)
+            match msg {
+                TestMessage::Add(value) => {
+                    let event = TestEvent { value: value.clone() };
+                    self.persist(&event, _ctx).await?;
+                    Ok(TestResponse::None)
+                },
+                TestMessage::GetAll => {
+                    Ok(TestResponse::All(self.state.clone()))
+                },
+            }
         }
     }
 
@@ -235,9 +275,14 @@ mod tests {
             self.state.push(event.value.clone());
             Ok(())
         }
+
+        fn id(&self) -> String {
+            "test_actor".to_string()
+        }
     }
 
     #[tokio::test]
+    #[tracing_test::traced_test]
     #[serial_test::serial]
     async fn test_persistent_actor() {
         let token = CancellationToken::new();
@@ -245,9 +290,24 @@ mod tests {
         let manager = StoreManager::default();
         system.add_helper("storage", manager.clone()).await;
 
+        // Create the actor.
         let actor = TestActor { state: Vec::new() };
-
         let actor_ref = system.create_actor(actor, "test_actor").await.unwrap();
+
+        // Send some messages to the actor.
+        actor_ref.tell(TestMessage::Add("event1".to_string())).await.unwrap();
+        actor_ref.tell(TestMessage::Add("event2".to_string())).await.unwrap();
+
+        // Get the state from the actor.
+        let response = actor_ref.ask(TestMessage::GetAll).await.unwrap();
+        if let TestResponse::All(state) = response {
+            assert_eq!(state, vec!["event1".to_string(), "event2".to_string()]);
+        } else {
+            panic!("Unexpected response");
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        manager.drop().unwrap();
     }
 
 }

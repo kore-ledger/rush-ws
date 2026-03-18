@@ -47,7 +47,7 @@ impl DbManager<FjallStore> for FjallDbManager {
     }
 
     fn drop(self) -> Result<(), Error> {
-        std::fs::remove_dir_all(&self.path)
+       std::fs::remove_dir_all(&self.path)
             .map_err(|e| Error::Store(format!("failed to drop fjall database -> {}", e)))?;
         Ok(())
     }
@@ -240,7 +240,7 @@ mod tests {
 
     impl Default for FjallDbManager {
         fn default() -> Self {
-            let path = PathBuf::from("./db/fjall_db");
+            let path = PathBuf::from("./fjall_db");
     
             Self::new(path.to_str().unwrap())
                 .expect("Failed to create FjallDbManager")
