@@ -192,6 +192,14 @@ where
                     match action {
                         ChildAction::Stop => {
                             debug!("Actor {} received stop action.", &self.actor_path);
+                            // Call pre_stop before stopping child actors to allow the actor to perform any necessary cleanup.
+                            if let Err(e) = self.actor.pre_stop(&mut self.context).await {
+                                error!("Actor {} pre_stop failed: {:?}", &self.actor_path, e);
+                                if let Err(e) = self.context.emit_fault(&e).await {
+                                    error!("Failed to emit fault for {}: {:?}", &self.actor_path, e);
+                                    return ActorLifecycle::Failed;
+                                }
+                            }
                             // Stop child actors first
                             if let Err(e) = self.context.stop_children().await {
                                 error!("Failed to stop child actors of {}: {:?}", &self.actor_path, e);

@@ -84,6 +84,25 @@ pub trait Actor: Send + Sync + Sized + 'static {
         self.pre_start(ctx).await
     }
 
+    /// Called before the actor is stopped.
+    /// Override this method to perform cleanup when the actor is stopped.
+    /// 
+    /// # Arguments
+    ///
+    /// * `context` - The context of the actor.
+    /// 
+    /// # Returns
+    /// 
+    /// Returns a void result.
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if the actor could not be stopped.
+    ///
+    async fn pre_stop(&mut self, _ctx: &mut ActorContext<Self>) -> Result<(), Error> {
+        Ok(())
+    }
+
     /// Called when the actor is stopped.
     ///
     /// # Arguments
