@@ -123,11 +123,14 @@ pub trait PersistentActor: Actor + Serialize + DeserializeOwned {
         &mut self,
         ctx: &mut ActorContext<Self>
     ) -> Result<(), ActorError> {
+        let type_name = Self::type_name();
         let store_manager = ctx.get_helper::<StoreManager>("storage").await
             .ok_or_else(|| ActorError::Store("DB Manager not found".to_string()))?;
-        let journal_store = store_manager.create_store(Self::type_name(), &self.id())
+        let journal_name = format!("{}-Journal", type_name);
+        let journal_store = store_manager.create_store(&journal_name, &self.id())
             .map_err(|e| ActorError::Store(format!("Failed to create journal store: {}", e)))?;
-        let snapshotter_store = store_manager.create_store(Self::type_name(), &self.id())
+        let snapshotter_name = format!("{}-Snapshotter", type_name);
+        let snapshotter_store = store_manager.create_store(&snapshotter_name, &self.id())
             .map_err(|e| ActorError::Store(format!("Failed to create snapshotter store: {}", e)))?;
         ctx.create_child(Journal::new(journal_store), "journal").await
             .map_err(|e| ActorError::Store(format!("Failed to create journal actor: {}", e)))?;
@@ -240,14 +243,14 @@ pub trait PersistentActor: Actor + Serialize + DeserializeOwned {
     ///   problem during flushing.
     ///
     async fn flush(&mut self, ctx: &mut ActorContext<Self>) -> Result<(), ActorError> {
+        // Snapshot the current state
+        self.snapshot(ctx).await?;
+
         // Get journal and snapshotter references
         let journal = self.journal(ctx).await
             .ok_or_else(|| ActorError::Store("Journal not found".to_string()))?;
         let snapshotter = self.snapshotter(ctx).await
             .ok_or_else(|| ActorError::Store("Snapshotter not found".to_string()))?;
-
-        // Snapshot the current state
-        self.snapshot(ctx).await?;
 
         // Flush the journal and snapshotter
         journal.tell(JournalMessage::Flush).await
@@ -379,7 +382,7 @@ mod tests {
             self.init_state(ctx).await
         }
 
-        async fn post_stop(&mut self, 
+        async fn pre_stop(&mut self, 
             ctx: &mut ActorContext<Self>
         ) -> Result<(), ActorError> {
             self.flush(ctx).await?;
@@ -465,8 +468,8 @@ mod tests {
         }
 
         // Stop the actor and create a new instance to test state recovery.
-        /*system.stop_actor("test_actor").await.unwrap();
-        let actor = TestActor { state: Vec::new() };
+        system.stop_actor("test_actor").await.unwrap();
+        /*let actor = TestActor { state: Vec::new() };
         let actor_ref = system.create_actor(actor, "test_actor").await.unwrap();
         let response = actor_ref.ask(TestMessage::GetAll).await.unwrap();
         if let TestResponse::All(state) = response {
