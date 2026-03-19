@@ -305,6 +305,21 @@ impl<A: Actor> ActorContext<A> {
         self.actor_supervisor.child_exists(&child_path).await
     }
 
+    /// Stops a child actor by name.
+    /// 
+    /// # Arguments
+    /// 
+    /// * `name` - The name of the child actor to stop.
+    /// 
+    /// # Returns
+    /// 
+    /// * `Result<(), Error>` - Ok if the child was stopped successfully, error otherwise.
+    /// 
+    pub async fn stop_child(&mut self, name: &str) -> Result<(), Error> {
+        let child_path = self.path.clone() / name;
+        self.actor_supervisor.stop_child(&child_path).await
+    }
+
     /// Stops all child actors of this actor.
     ///
     /// # Returns

@@ -146,6 +146,21 @@ impl System {
         self.system_supervisor.child_exists(&child_path).await
     }
 
+    /// Stops a specific root actor by name.
+    /// 
+    /// # Arguments
+    /// 
+    /// * `name` - The name of the root actor to stop.
+    /// 
+    /// # Returns
+    ///
+    /// * `Result<(), Error>` - Ok if the root actor was stopped successfully, error otherwise.
+    ///
+    pub async fn stop_actor(&mut self, name: &str) -> Result<(), Error> {
+        let child_path = self.root_path.clone() / name;
+        self.system_supervisor.stop_child(&child_path).await
+    }
+
     /// Handles a child actor error signal.
     ///     
     /// # Arguments
@@ -440,8 +455,37 @@ impl Supervisor {
                 )));
             } else {
                 let _ = self.registry.write().await.remove(path);
-                //let _ = self.action_senders.write().await.remove(path);
             }
+        }
+        Ok(())
+    }
+
+    /// Stops a specific child actor by path.
+    /// 
+    /// # Arguments
+    /// 
+    /// * `path` - The path of the child actor to stop.
+    /// 
+    /// # Returns
+    /// 
+    /// * `Result<(), Error>` - Ok if the child was stopped successfully, error otherwise.
+    pub async fn stop_child(&mut self, path: &ActorPath) -> Result<(), Error> {
+        let action_senders = self.action_senders.read().await;
+        if let Some(action_sender) = action_senders.get(path) {
+            if let Err(e) = action_sender.send(ChildAction::Stop).await {
+                error!("Failed to send stop action to child '{}': {:?}", path, e);
+                return Err(Error::Supervision(format!(
+                    "Failed to send stop action to child '{}': {:?}",
+                    path, e
+                )));
+            } else {
+                let _ = self.registry.write().await.remove(path);
+            }
+        } else {
+            return Err(Error::Supervision(format!(
+                "Child '{}' not found for stopping.",
+                path
+            )));
         }
         Ok(())
     }

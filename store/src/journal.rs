@@ -129,13 +129,32 @@ impl<S: Store> BaseJournal<S> {
         let options = IteratorOptions::Range { from, to };
         self.store.iter(options).collect::<Vec<(u64, Vec<u8>)>>()
     }
+
+    /// Flushes the journal's store to ensure that all pending writes are persisted. This 
+    /// method is typically called during shutdown to ensure that all events are saved properly.
+    /// 
+    /// # Returns
+    /// 
+    /// * `Result<(), ActorError>` - Ok if the flush was successful, or an error if there was a 
+    ///   problem during flushing.
+    ///
+    fn flush(&mut self) -> Result<(), ActorError> {
+        self.store.flush()
+            .map_err(|e| {
+                error!("Failed to flush store: {}", e);
+                ActorError::Store(format!("Failed to flush store: {}", e))
+            })
+    }
+
 }
 
 pub enum JournalMessage {
     Put(Vec<u8>),
     Get(u64),
     Last,
+    LastSequence,
     Range(u64, Option<u64>),
+    Flush,
 }
     
 impl Message for JournalMessage {}
@@ -144,6 +163,7 @@ pub enum JournalResponse {
     Event(Vec<u8>),
     Events(Vec<(u64, Vec<u8>)>),
     Last(u64, Vec<u8>),
+    LastSequence(u64),
     NotFound,
     None,
 }
@@ -165,7 +185,7 @@ impl<S: Store> Actor for BaseJournal<S> {
         match msg {
             JournalMessage::Put(event) => {
                 match self.put(&event) {
-                    Ok(_) => Ok(JournalResponse::None),
+                    Ok(_) => Ok(JournalResponse::LastSequence(self.latest_sequence)),
                     Err(e) => Err(ActorError::Store(
                         format!("Failed to put event in journal: {}", e)
                     )),
@@ -185,9 +205,21 @@ impl<S: Store> Actor for BaseJournal<S> {
                     None => Ok(JournalResponse::NotFound),
                 }
             },
+            JournalMessage::LastSequence => {
+                let seq = self.latest_sequence();
+                Ok(JournalResponse::LastSequence(seq))
+            },
             JournalMessage::Range(from, to) => {
                 let events = self.range(from, to);
                 Ok(JournalResponse::Events(events))
+            },
+            JournalMessage::Flush => {
+                match self.flush() {
+                    Ok(_) => Ok(JournalResponse::None),
+                    Err(e) => Err(ActorError::Store(
+                        format!("Failed to flush journal: {}", e)
+                    )),
+                }
             },
         }
     }
@@ -212,7 +244,11 @@ mod tests {
         let journal = system.create_actor(journal, "journal").await.unwrap();
         for i in 1..=5 {
             let event = format!("test event {}", i).into_bytes();
-            journal.tell(JournalMessage::Put(event)).await.unwrap();
+            let response = journal.ask(JournalMessage::Put(event)).await.unwrap();
+            match response {
+                JournalResponse::LastSequence(seq) => assert_eq!(seq, i),
+                _ => panic!("Expected JournalResponse::LastSequence"),
+            }
         }
         let event = format!("test event {}", 3).into_bytes();
         let response = journal.ask(JournalMessage::Get(3)).await.unwrap();
@@ -241,6 +277,11 @@ mod tests {
             },
             _ => panic!("Expected JournalResponse::Events"),
         }
+
+        // Test flushing the journal
+        let response = journal.tell(JournalMessage::Flush).await;
+        assert!(response.is_ok());
+        
         assert!(manager.drop().is_ok());        
     }
 

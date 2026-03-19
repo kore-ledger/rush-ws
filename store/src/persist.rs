@@ -1,9 +1,7 @@
 //
 
 use crate::{
-    Journal, JournalMessage, JournalResponse, 
-    Snapshotter, SnapshotMessage, SnapshotResponse, 
-    stores::{DbManager, StoreManager}
+    Journal, JournalMessage, JournalResponse, SnapshotMessage, SnapshotResponse, Snapshotter, stores::{DbManager, StoreManager}
 };
 
 use actor::{Actor, ActorContext, ActorRef, Error as ActorError};
@@ -168,6 +166,30 @@ pub trait PersistentActor: Actor + Serialize + DeserializeOwned {
         ctx.get_child("snapshotter").await
     }
 
+    /// Get the last sequence number of the events in the journal. 
+    /// 
+    /// # Arguments
+    /// 
+    /// * `ctx` - The actor context, used to access the child actors.
+    /// 
+    /// # Returns
+    /// 
+    /// * `Option<u64>` - The last sequence number of the events in the journal, or None if the journal
+    ///   actor was not found or an error occurred.
+    ///
+    async fn last_sequence(&self, ctx: &mut ActorContext<Self>) -> Option<u64> {
+        if let Some(journal) = self.journal(ctx).await {
+            let response: JournalResponse = journal.ask(JournalMessage::LastSequence).await.ok()?;
+            if let JournalResponse::LastSequence(seq) = response {
+                Some(seq)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
     /// Persist an event to the journal.
     /// 
     /// # Arguments
@@ -180,22 +202,126 @@ pub trait PersistentActor: Actor + Serialize + DeserializeOwned {
     /// * `Result<(), ActorError>` - Ok if the event was persisted successfully, or an error if
     ///   there was a problem persisting the event.
     ///
-    async fn persist(&mut self, event: &Self::Event, ctx: &mut ActorContext<Self>) -> Result<(), ActorError> {
+    async fn persist(&mut self, event: &Self::Event, ctx: &mut ActorContext<Self>) -> Result<u64, ActorError> {
         let serialized_event = to_vec(event)
             .map_err(|e| ActorError::Serialization(format!("Failed to serialize event: {}", e)))?;
         if let Some(journal) = self.journal(ctx).await {
-            journal.tell(JournalMessage::Put(serialized_event)).await
+            let response = journal.ask(JournalMessage::Put(serialized_event)).await
                 .map_err(|e| {
                     error!("Failed to send event to journal: {}", e);
                     ActorError::Store(format!("Failed to send event to journal: {}", e))
                 })?;
+            let sn = if let JournalResponse::LastSequence(seq) = response {
+                seq
+            } else {
+                return Err(ActorError::Store("Unexpected response when putting event in journal".to_string()));
+            };
             debug!("Persisted event to journal");
             self.apply_event(event).await?;
             debug!("Applied event to state");
-            Ok(())
+            Ok(sn)
         } else {
             error!("Journal actor not found, failed to persist event");
             Err(ActorError::Store("Journal not found".to_string()))
+        }
+    }
+
+    /// Flush the journal and snapshotter to ensure all data is persisted to the underlying stores.
+    /// This method is used to ensure that all events and snapshots are written to the underlying 
+    /// storage, providing durability guarantees for the actor's state.
+    /// 
+    /// # Arguments
+    /// 
+    /// * `ctx` - The actor context, used to access the child actors.
+    /// 
+    /// # Returns
+    /// 
+    /// * `Result<(), ActorError>` - Ok if the flush was successful, or an error if there was a 
+    ///   problem during flushing.
+    ///
+    async fn flush(&mut self, ctx: &mut ActorContext<Self>) -> Result<(), ActorError> {
+        // Get journal and snapshotter references
+        let journal = self.journal(ctx).await
+            .ok_or_else(|| ActorError::Store("Journal not found".to_string()))?;
+        let snapshotter = self.snapshotter(ctx).await
+            .ok_or_else(|| ActorError::Store("Snapshotter not found".to_string()))?;
+
+        // Snapshot the current state
+        self.snapshot(ctx).await?;
+
+        // Flush the journal and snapshotter
+        journal.tell(JournalMessage::Flush).await
+            .map_err(|e| {
+                error!("Failed to send flush message to journal: {}", e);
+                ActorError::Store(format!("Failed to send flush message to journal: {}", e))
+            })?;
+        snapshotter.tell(SnapshotMessage::Flush).await
+            .map_err(|e| {
+                error!("Failed to send flush message to snapshotter: {}", e);
+                ActorError::Store(format!("Failed to send flush message to snapshotter: {}", e))
+            })?;
+        debug!("Flushed journal and snapshotter");
+
+        Ok(())
+    }
+    /// Persist a snapshot of the actor's state to the snapshotter.
+    /// 
+    /// # Arguments
+    /// 
+    /// * `ctx` - The actor context, used to access the child actors.
+    /// 
+    /// # Returns
+    /// 
+    /// * `Result<(), ActorError>` - Ok if the snapshot was persisted successfully, or an error if
+    ///   there was a problem persisting the snapshot.
+    ///
+    async fn snapshot(&mut self, ctx: &mut ActorContext<Self>) -> Result<(), ActorError> {
+        let sn = self.last_sequence(ctx).await
+            .ok_or_else(|| {
+                error!("Failed to get last journal sequence, cannot create snapshot");
+                ActorError::Store("Failed to get last journal sequence".to_string())
+            })?;
+        let serialized_state = to_vec(self)
+            .map_err(|e| ActorError::Serialization(format!("Failed to serialize state: {}", e)))?;
+        if let Some(snapshotter) = self.snapshotter(ctx).await {
+            snapshotter.tell(SnapshotMessage::SaveSnapshot { key: sn, data: serialized_state }).await
+                .map_err(|e| {
+                    error!("Failed to send snapshot to snapshotter: {}", e);
+                    ActorError::Store(format!("Failed to send snapshot to snapshotter: {}", e))
+                })?;
+            debug!("Persisted snapshot to snapshotter");
+            Ok(())
+        } else {
+            error!("Snapshotter actor not found, failed to persist snapshot");
+            Err(ActorError::Store("Snapshotter not found".to_string()))
+        }
+    }
+
+    /// Retrieve the last snapshot stored in the snapshotter, along with its sequence number. This
+    /// method is used to get the most recent snapshot of the actor's state, allowing for 
+    /// efficient recovery of the actor's state.
+    /// 
+    /// # Arguments
+    /// 
+    /// * `ctx` - The actor context, used to access the child actors.
+    /// 
+    /// # Returns
+    /// 
+    /// * `Option<(u64, Self)>` - Some with the sequence number and deserialized state if a 
+    ///   snapshot was found, or None if no snapshot was found or there was an error during 
+    ///   retrieval.
+    ///
+    async fn last_snapshot(&self, ctx: &mut ActorContext<Self>) -> Option<(u64, Self)> {
+        if let Some(snapshotter) = self.snapshotter(ctx).await {
+            let response = snapshotter.ask(SnapshotMessage::LastSnapshot).await.ok()?;
+            if let SnapshotResponse::LastResult(Some((sn, data))) = response {
+                let deserialized_state: Self = from_slice(&data).ok()?;
+                Some((sn, deserialized_state))
+            } else {
+                None
+            }
+        } else {
+            None
         }
     }
 }
@@ -213,6 +339,8 @@ mod tests {
 
      enum TestMessage {
         Add(String),
+        LastSnapshot,
+        Snapshot,
         GetAll,
     }
 
@@ -227,6 +355,7 @@ mod tests {
 
     enum TestResponse {
         All(Vec<String>),
+        Snapshot(Option<(u64, TestActor)>),
         None,
     }
 
@@ -244,26 +373,42 @@ mod tests {
         type Event = TestEvent;
 
         async fn pre_start(
-            &mut self, ctx: 
-            &mut ActorContext<Self>
+            &mut self, 
+            ctx: &mut ActorContext<Self>
         ) -> Result<(), ActorError> {
             self.init_state(ctx).await
         }
 
+        async fn post_stop(&mut self, 
+            ctx: &mut ActorContext<Self>
+        ) -> Result<(), ActorError> {
+            self.flush(ctx).await?;
+            Ok(())
+        }
+
         async fn handle(
             &mut self, 
-            _ctx: &mut ActorContext<Self>,
+            ctx: &mut ActorContext<Self>,
             _sender: &ActorPath,
             msg: Self::Message,
         ) -> Result<Self::Response, ActorError> {
             match msg {
                 TestMessage::Add(value) => {
                     let event = TestEvent { value: value.clone() };
-                    self.persist(&event, _ctx).await?;
+                    let sn = self.persist(&event, ctx).await?;
+                    assert_eq!(sn, self.state.len() as u64);
                     Ok(TestResponse::None)
                 },
                 TestMessage::GetAll => {
                     Ok(TestResponse::All(self.state.clone()))
+                },
+                TestMessage::LastSnapshot => {
+                    Ok(TestResponse::Snapshot(self.last_snapshot(ctx).await))
+                }
+                TestMessage::Snapshot => {
+                    //let sn = self.state.len() as u64;
+                    self.snapshot(ctx).await?;
+                    Ok(TestResponse::None)
                 },
             }
         }
@@ -306,7 +451,31 @@ mod tests {
             panic!("Unexpected response");
         }
 
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        // Do snapshot
+        let response = actor_ref.ask(TestMessage::Snapshot).await.unwrap();
+        assert!(matches!(response, TestResponse::None));
+
+        // Get the last snapshot
+        let response = actor_ref.ask(TestMessage::LastSnapshot).await.unwrap();
+        if let TestResponse::Snapshot(Some((sn, snapshot))) = response {
+            assert_eq!(sn, 2);
+            assert_eq!(snapshot.state, vec!["event1".to_string(), "event2".to_string()]);
+        } else {
+            panic!("Failed to get last snapshot");
+        }
+
+        // Stop the actor and create a new instance to test state recovery.
+        /*system.stop_actor("test_actor").await.unwrap();
+        let actor = TestActor { state: Vec::new() };
+        let actor_ref = system.create_actor(actor, "test_actor").await.unwrap();
+        let response = actor_ref.ask(TestMessage::GetAll).await.unwrap();
+        if let TestResponse::All(state) = response {
+            assert_eq!(state, vec!["event1".to_string(), "event2".to_string()]);
+        } else {
+            panic!("Unexpected response");
+        }*/
+
+        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
         manager.drop().unwrap();
     }
 

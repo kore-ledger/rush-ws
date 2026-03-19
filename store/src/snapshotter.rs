@@ -54,7 +54,7 @@ impl<S: Store> BaseSnapshotter<S> {
     /// 
     /// * `Result<(), ActorError>` - Ok if the snapshot was saved successfully, or an error if there was a problem during saving.
     ///
-    pub fn save_snapshot(&mut self, key: u64, data: Vec<u8>) -> Result<(), ActorError> {
+    fn save_snapshot(&mut self, key: u64, data: Vec<u8>) -> Result<(), ActorError> {
         self.store.put(key, &data)
             .map_err(|e| ActorError::Store(format!("Failed to save snapshot: {}", e)))
     }
@@ -72,7 +72,7 @@ impl<S: Store> BaseSnapshotter<S> {
     /// * `Option<Vec<u8>>` - Some with the snapshot data if found, or None if the snapshot was not found or there was an 
     ///   error during loading.
     ///
-    pub fn load_snapshot(&self, key: u64) -> Option<Vec<u8>> {
+    fn load_snapshot(&self, key: u64) -> Option<Vec<u8>> {
         match self.store.get(key) {
             Ok(data) => Some(data),
             Err(e) => {
@@ -90,8 +90,24 @@ impl<S: Store> BaseSnapshotter<S> {
     /// * `Option<(u64, Vec<u8>)>` - Some with the key and snapshot data if found, or None if no 
     ///   snapshot was found or there was an error during retrieval.
     ///
-    pub fn last_snapshot(&self) -> Option<(u64, Vec<u8>)> {
+    fn last_snapshot(&self) -> Option<(u64, Vec<u8>)> {
         self.store.last()
+    }
+
+    /// Flushes the snapshotter's store to ensure that all pending writes are persisted. This 
+    /// method is typically called during shutdown to ensure that all snapshots are saved properly.
+    /// 
+    /// # Returns
+    /// 
+    /// * `Result<(), ActorError>` - Ok if the flush was successful, or an error if there was a 
+    ///   problem during flushing.
+    ///
+    fn flush(&mut self) -> Result<(), ActorError> {
+        self.store.flush()
+            .map_err(|e| {
+                error!("Failed to flush store: {}", e);
+                ActorError::Store(format!("Failed to flush store: {}", e))
+            })
     }
 
 }
@@ -107,6 +123,8 @@ pub enum SnapshotMessage {
     LoadSnapshot { key: u64 },
     /// A message to retrieve the last snapshot stored in the snapshotter.
     LastSnapshot,
+    /// A message to flush the snapshotter's store, ensuring all pending writes are persisted.
+    Flush,
 }
 
 impl Message for SnapshotMessage {}
@@ -151,6 +169,10 @@ impl<S: Store> Actor for BaseSnapshotter<S> {
             SnapshotMessage::LastSnapshot => {
                 let result = self.last_snapshot();
                 Ok(SnapshotResponse::LastResult(result))
+            },
+            SnapshotMessage::Flush => {
+                self.flush()?;
+                Ok(SnapshotResponse::None)
             },
         }
     }
@@ -204,6 +226,10 @@ mod tests {
         } else {
             panic!("Failed to load last snapshot");
         }
+
+        // Test flushing the snapshotter
+        let response = snapshotter_ref.tell(SnapshotMessage::Flush).await;
+        assert!(response.is_ok());
 
         assert!(manager.drop().is_ok());       
     }

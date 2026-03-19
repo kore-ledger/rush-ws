@@ -218,6 +218,7 @@ impl Store for FjallStore {
             },
         }
     }
+
 }
 
 #[cfg(test)]
