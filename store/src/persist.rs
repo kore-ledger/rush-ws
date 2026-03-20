@@ -9,6 +9,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use serde_bare::{to_vec, from_slice};
 use async_trait::async_trait;
 use tracing::{debug, error};
+use std::fmt::Debug;
 
 /// A trait for actors that can persist their state using a journal and snapshotter.
 /// Actors implementing this trait must define an associated type `Event` that represents the 
@@ -19,7 +20,7 @@ use tracing::{debug, error};
 /// The `persist` method can be used to persist an event to the journal, and the `create_stores` 
 /// method is responsible for creating the necessary stores for the journal and snapshotter.
 #[async_trait]
-pub trait PersistentActor: Actor + Serialize + DeserializeOwned {
+pub trait PersistentActor: Actor + Debug + Serialize + DeserializeOwned {
 
     /// Get the type name of the actor, used for creating stores. This method is used to 
     /// determine the name of the stores for the journal and snapshotter, allowing different 
@@ -89,10 +90,11 @@ pub trait PersistentActor: Actor + Serialize + DeserializeOwned {
             let deserialized_state: Self = from_slice(&snapshot_data)
                 .map_err(|e| ActorError::Serialization(format!("Failed to deserialize snapshot: {}", e)))?;
             *self = deserialized_state;
+            debug!("Initialized state from snapshot with sequence number {}", snapshot_from);
         }
         let events = self.journal(ctx).await
             .ok_or_else(|| ActorError::Store("Journal not found".to_string()))?
-            .ask(JournalMessage::Range(from, None)).await
+            .ask(JournalMessage::Range(from + 1, None)).await
             .map_err(|e| ActorError::Store(format!("Failed to get events from journal: {}", e)))?;
         if let JournalResponse::Events(events) = events {
             for (_, event_data) in events {
@@ -132,10 +134,20 @@ pub trait PersistentActor: Actor + Serialize + DeserializeOwned {
         let snapshotter_name = format!("{}-Snapshotter", type_name);
         let snapshotter_store = store_manager.create_store(&snapshotter_name, &self.id())
             .map_err(|e| ActorError::Store(format!("Failed to create snapshotter store: {}", e)))?;
-        ctx.create_child(Journal::new(journal_store), "journal").await
+        if let Err(e) = ctx.create_child(Journal::new(journal_store), "journal").await {
+            //println!("Failed to create journal actor: {}", e);
+            error!("Failed to create journal actor: {}", e);
+            return Err(ActorError::Store(format!("Failed to create journal actor: {}", e)));
+        }
+        if let Err(e) = ctx.create_child(Snapshotter::new(snapshotter_store), "snapshotter").await {
+            //println!("Failed to create snapshotter actor: {}", e);
+            error!("Failed to create snapshotter actor: {}", e);
+            return Err(ActorError::Store(format!("Failed to create snapshotter actor: {}", e)));
+        }
+        /*ctx.create_child(Journal::new(journal_store), "journal").await
             .map_err(|e| ActorError::Store(format!("Failed to create journal actor: {}", e)))?;
         ctx.create_child(Snapshotter::new(snapshotter_store), "snapshotter").await
-            .map_err(|e| ActorError::Store(format!("Failed to create snapshotter actor: {}", e)))?;
+            .map_err(|e| ActorError::Store(format!("Failed to create snapshotter actor: {}", e)))?;*/
         Ok(())
     }
 
@@ -469,14 +481,27 @@ mod tests {
 
         // Stop the actor and create a new instance to test state recovery.
         system.stop_actor("test_actor").await.unwrap();
-        /*let actor = TestActor { state: Vec::new() };
+
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        let actor = TestActor { state: Vec::new() };
         let actor_ref = system.create_actor(actor, "test_actor").await.unwrap();
         let response = actor_ref.ask(TestMessage::GetAll).await.unwrap();
         if let TestResponse::All(state) = response {
             assert_eq!(state, vec!["event1".to_string(), "event2".to_string()]);
         } else {
             panic!("Unexpected response");
-        }*/
+        }
+
+        // Add another event and check state.
+        actor_ref.tell(TestMessage::Add("event3".to_string())).await.unwrap();
+        let response = actor_ref.ask(TestMessage::GetAll).await.unwrap();
+        if let TestResponse::All(state) = response {
+            assert_eq!(state, vec!["event1".to_string(), "event2".to_string(), "event3".to_string()]);
+        } else {
+            panic!("Unexpected response");
+        }
+
+        system.stop_children().await.unwrap();
 
         tokio::time::sleep(std::time::Duration::from_millis(800)).await;
         manager.drop().unwrap();

@@ -20,6 +20,7 @@ pub type Journal = BaseJournal<FjallStore>;
 /// persisting events and providing them to the actor when it needs to replay its state. The 
 /// journal also keeps track of the latest sequence number for the events, allowing actors 
 /// to know up to which point they have replayed.
+///
 pub struct BaseJournal<S: Store> {
     /// The underlying store used for persisting events.
     store: S,
@@ -37,12 +38,16 @@ impl<S: Store> BaseJournal<S> {
     /// # Returns
     /// 
     /// A new instance of `BaseJournal` initialized with the provided store, and the latest
-    /// sequence set to 0.
+    /// sequence set to the latest sequence from the store.
     /// 
     pub fn new(store: S) -> Self {
+        let mut latest_sequence = 0_u64;
+        if let Some((seq, _)) = store.last() {
+            latest_sequence = seq;
+        }
         Self {
             store,
-            latest_sequence: 0,
+            latest_sequence,
         }
     }
 

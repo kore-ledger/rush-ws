@@ -478,8 +478,6 @@ impl Supervisor {
                     "Failed to send stop action to child '{}': {:?}",
                     path, e
                 )));
-            } else {
-                let _ = self.registry.write().await.remove(path);
             }
         } else {
             return Err(Error::Supervision(format!(
@@ -487,6 +485,8 @@ impl Supervisor {
                 path
             )));
         }
+        let _ = self.registry.write().await.remove(path);
+        //let _ = self.action_senders.write().await.remove(path);
         Ok(())
     }
 
