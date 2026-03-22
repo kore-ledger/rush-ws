@@ -16,6 +16,7 @@ use crate::{
 
 use tokio::sync::{broadcast, oneshot};
 use tracing::{debug, error};
+use tracing_subscriber::field::debug;
 
 /// Runner responsible for managing the lifecycle and execution of an actor.
 ///
@@ -143,6 +144,10 @@ where
                 }
                 ActorLifecycle::Stopped => {
                     debug!("Actor {} stopped.", &self.actor_path);
+                    if let Err(e) = self.context.emit_stopped().await {
+                        error!("Actor {} emit_stopped failed: {:?}", &self.actor_path, e);
+                    }
+                    debug!("Actor {} calling post_stop.", &self.actor_path);
                     if let Err(e) = self.actor.post_stop(&mut self.context).await {
                         error!("Actor {} post_stop failed: {:?}", &self.actor_path, e);
                     }
@@ -185,6 +190,18 @@ where
                             error!("Actor {} received child fault from {}.", &self.actor_path, child_path);
                             self.actor.on_child_fault(&child_path, &error, &mut self.context).await;
                         }
+                        ActorSignal::ChildStopped(child_path) => {
+                            debug!("Actor {} received child stopped signal from {}.", &self.actor_path, child_path);
+                            self.context.remove_child(&child_path.key()).await;
+                            if !self.context.has_childs().await {
+                                debug!("Actor {} has no more child actors after {} stopped.", 
+                                    &self.actor_path, 
+                                    child_path
+                                );
+                                return ActorLifecycle::Stopped;
+                            }
+                        }
+
                     }
                 }
                 // Handle child actions (stop/restart) sent by the supervisor.
@@ -200,15 +217,20 @@ where
                                     return ActorLifecycle::Failed;
                                 }
                             }
-                            // Stop child actors first
-                            if let Err(e) = self.context.stop_children().await {
-                                error!("Failed to stop child actors of {}: {:?}", &self.actor_path, e);
-                                if let Err(e) = self.context.emit_fault(&e).await {
-                                    error!("Failed to emit fault for {}: {:?}", &self.actor_path, e);
-                                    return ActorLifecycle::Failed;
+                            if self.context.has_childs().await {
+                                debug!("Actor {} has child actors, stopping them first.", &self.actor_path);
+                                // Stop child actors first
+                                if let Err(e) = self.context.stop_children().await {
+                                    error!("Failed to stop child actors of {}: {:?}", &self.actor_path, e);
+                                    if let Err(e) = self.context.emit_fault(&e).await {
+                                        error!("Failed to emit fault for {}: {:?}", &self.actor_path, e);
+                                        return ActorLifecycle::Failed;
+                                    }
                                 }
+                            } else {
+                                debug!("Actor {} has no child actors, stopping immediately.", &self.actor_path);
+                                return ActorLifecycle::Stopped;
                             }
-                            return ActorLifecycle::Stopped;
                         },
                         ChildAction::Restart => {
                             debug!("Actor {} received restart action.", &self.actor_path);

@@ -349,6 +349,22 @@ impl<A: Actor> ActorContext<A> {
         self.actor_supervisor.stop_children().await
     }
 
+    /// 
+    pub async fn has_childs(&self) -> bool {
+        self.actor_supervisor.has_childs().await
+    }
+
+    /// Removes a child actor by name. 
+    /// 
+    /// # Arguments
+    ///
+    /// * `name` - The name of the child actor to remove.
+    /// 
+    pub async fn remove_child(&mut self, name: &str) {
+        let child_path = self.path.clone() / name;
+        self.actor_supervisor.remove_child(&child_path).await
+    }
+
     /// Restarts all child actors of this actor.
     ///
     /// # Returns
@@ -426,6 +442,28 @@ impl<A: Actor> ActorContext<A> {
             error!("Failed to emit fault signal: {}", e);
             Err(Error::SendEvent(format!(
                 "Failed to emit fault signal: {}",
+                e
+            )))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Emits a stopped signal to the parent actor.
+    /// This should be called when the actor is stopped to notify the parent actor.
+    /// 
+    /// # Returns
+    /// * `Result<(), Error>` - The result of the emit operation.
+    ///
+    pub async fn emit_stopped(&self) -> Result<(), Error> {
+        if let Some(signal_sender) = &self.signal_sender
+            && let Err(e) = signal_sender
+                .send(ActorSignal::ChildStopped(self.path.clone()))
+                .await
+        {
+            error!("Failed to emit stopped signal: {}", e);
+            Err(Error::SendEvent(format!(
+                "Failed to emit stopped signal: {}",
                 e
             )))
         } else {
