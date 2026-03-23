@@ -6,7 +6,7 @@
 use crate::{
     ActorPath, Error,
     handler::HandlerHelper,
-    supervision::SupervisionStrategy,
+    supervision::{Strategy, SupervisionStrategy, RetryStrategy},
     system::{ActorSignal, Config, SignalSender, SupervicionHandler},
 };
 use async_trait::async_trait;
@@ -27,7 +27,7 @@ const MAX_ACTOR_DEPTH: usize = 100;
 pub trait Event: Serialize + DeserializeOwned + Debug + Clone + Send + Sync + 'static {}
 
 /// Defines what an actor will receive as its message, and with what it should respond.
-pub trait Message: Send + Sync + 'static {}
+pub trait Message: Clone + Send + Sync + 'static {}
 
 /// Defines the response of a message.
 pub trait Response: Send + Sync + 'static {}
@@ -577,6 +577,44 @@ where
         self.handler.ask(self.path.clone(), msg).await
     }
 
+    /// Sends a message to the actor and waits for a response, with retry logic.
+    ///
+    /// # Arguments
+    ///     
+    /// * `msg` - The message to send.
+    /// * `retry_strategy` - The strategy to use for retrying the message if it fails.
+    ///     
+    /// # Returns
+    ///     
+    /// * `Result<A::Response, Error>` - The response from the actor or an error if all retries 
+    ///   fail.
+    ///
+    pub async fn retry_ask(
+        &self, 
+        msg: A::Message, 
+        retry_strategy: &mut Strategy
+    ) -> Result<A::Response, Error>
+    {
+        let attempts = 0_usize;
+        while attempts < retry_strategy.max_retries() {
+            debug!(
+                "Attempting ask with retry strategy. Attempt {}/{}", 
+                attempts + 1, 
+                retry_strategy.max_retries()
+            );
+            match self.ask(msg.clone()).await {
+                Ok(response) => return Ok(response),
+                Err(e) => {
+                    error!("Ask failed with error: {:?}. Attempt {}/{}", e, attempts + 1, retry_strategy.max_retries());
+                    if let Some(backoff) = retry_strategy.next_backoff() {
+                        tokio::time::sleep(backoff).await;
+                    }
+                }
+            }
+        }
+        Err(Error::RetryLimitExceeded)
+    }
+
     /// Subscribes to the actor event bus.
     /// This will return an event receiver that can be used to receive events from the actor.
     /// The event receiver will receive events that the actor emits after processing a message.
@@ -640,6 +678,7 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
     enum TestMessage {
         Ping,
     }
@@ -839,5 +878,64 @@ mod tests {
         // Try to receive event
         let result = event_receiver.try_recv();
         assert!(result.is_ok() || event_receiver.len() == 0);
+    }
+
+    struct TestRetryActor {
+        pub fail_count: usize,
+        pub fail_threshold: usize,
+    }
+
+    #[async_trait::async_trait]
+    impl Actor for TestRetryActor {
+        type Message = TestMessage;
+        type Response = TestResponse;
+        type Event = TestEvent;
+
+        async fn handle(
+            &mut self,
+            _ctx: &mut ActorContext<Self>,
+            _sender: &ActorPath,
+            _msg: Self::Message,
+        ) -> Result<Self::Response, Error> {
+            if self.fail_count < self.fail_threshold {
+                self.fail_count += 1;
+                Err(Error::SendMessage("Simulated failure".into()))
+            } else {
+                Ok(TestResponse::Pong)
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_ask_retry() {
+        use crate::supervision::FixedIntervalStrategy;
+        let (sender, mut receiver) = mailbox::<TestRetryActor>(10);
+        let handler = HandlerHelper::new(sender);
+        let actor_path = ActorPath::from("retry_actor");
+        let (event_sender, _) = broadcast::channel(10);
+        let actor_ref = ActorRef::new(actor_path.clone(), handler, event_sender.subscribe());
+
+        // Spawn actor
+        tokio::spawn(async move {
+            let mut actor = TestRetryActor { fail_count: 0, fail_threshold: 2 };
+            let config = Config::default();
+            let mut ctx = ActorContext::new(
+                actor_path,
+                SupervicionHandler::default(),
+                event_sender,
+                None,
+                &config,
+            );
+
+            while let Some(msg) = receiver.recv().await {
+                msg.handle(&mut actor, &mut ctx).await;
+            }
+        });
+
+        // Test retry_ask with a simple retry strategy
+        let mut retry_strategy = Strategy::FixedInterval(FixedIntervalStrategy::new(3, Duration::from_millis(100)));
+        let response = actor_ref.retry_ask(TestMessage::Ping, &mut retry_strategy).await;
+        assert!(response.is_ok());
     }
 }

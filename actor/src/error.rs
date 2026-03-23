@@ -33,4 +33,7 @@ pub enum Error {
     /// Store error.
     #[error("Store error: {0}")]
     Store(String),
+    /// Retry limit exceeded error.
+    #[error("Retry limit exceeded")]
+    RetryLimitExceeded,
 }
