@@ -6,6 +6,10 @@ rust-version.workspace = true
 
 resolver = "2"
 
+[dependencies]
+actor = { path = "actor" }
+store = { path = "store" }
+
 [workspace]
 members = [
     "actor",
