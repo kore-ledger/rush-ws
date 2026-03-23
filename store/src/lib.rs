@@ -15,7 +15,7 @@ mod stores;
 pub use error::Error;
 pub use persist::PersistentActor;
 pub use journal::{Journal, JournalMessage, JournalResponse};
-pub use stores::Store;
+pub use stores::{DbManager, Store};
 pub use snapshotter::{Snapshotter, SnapshotMessage, SnapshotResponse};
 
 #[cfg(feature = "fjall")]

@@ -7,7 +7,7 @@ use crate::{
     ActorPath, Error,
     handler::HandlerHelper,
     supervision::SupervisionStrategy,
-    system::{ActorSignal, Config, SignalSender, Supervisor},
+    system::{ActorSignal, Config, SignalSender, SupervicionHandler},
 };
 use async_trait::async_trait;
 use serde::{Serialize, Deserialize, de::DeserializeOwned};
@@ -218,7 +218,7 @@ pub struct ActorContext<A: Actor> {
     /// The path of the actor.
     path: ActorPath,
     /// The actor supervisor.
-    actor_supervisor: Supervisor,
+    actor_supervisor: SupervicionHandler,
     /// Event sender.
     event_sender: EventSender<<A as Actor>::Event>,
     /// Signal sender to parent actor.
@@ -244,7 +244,7 @@ impl<A: Actor> ActorContext<A> {
     ///
     pub fn new(
         path: ActorPath,
-        actor_supervisor: Supervisor,
+        actor_supervisor: SupervicionHandler,
         event_sender: EventSender<<A as Actor>::Event>,
         signal_sender: Option<SignalSender>,
         config: &Config,
@@ -343,9 +343,10 @@ impl<A: Actor> ActorContext<A> {
     ///
     /// # Returns
     ///
-    /// * `Result<(), Error>` - The result of the stop operation.
+    /// * `Result<bool, Error>` - The result of the stop operation. True if there were child 
+    ///   actors to stop, false if there were no child actors, error otherwise.
     ///
-    pub async fn stop_children(&mut self) -> Result<(), Error> {
+    pub async fn stop_children(&mut self) -> Result<bool, Error> {
         self.actor_supervisor.stop_children().await
     }
 
@@ -456,20 +457,30 @@ impl<A: Actor> ActorContext<A> {
     /// * `Result<(), Error>` - The result of the emit operation.
     ///
     pub async fn emit_stopped(&self) -> Result<(), Error> {
-        if let Some(signal_sender) = &self.signal_sender
-            && let Err(e) = signal_sender
+        if let Some(signal_sender) = &self.signal_sender {
+            debug!("Emitting stopped signal for actor {}", self.path());
+            if let Err(e) = signal_sender
                 .send(ActorSignal::ChildStopped(self.path.clone()))
                 .await
-        {
-            error!("Failed to emit stopped signal: {}", e);
-            Err(Error::SendEvent(format!(
-                "Failed to emit stopped signal: {}",
-                e
-            )))
+            {
+                error!("Failed to emit stopped signal: {}", e);
+                Err(Error::SendEvent(format!(
+                    "Failed to emit stopped signal: {}",
+                    e
+                )))
+            } else {
+                Ok(())
+            }
+
         } else {
-            Ok(())
+            error!("No signal sender available to emit stopped signal for actor {}", self.path());
+            Err(Error::SendEvent(format!(
+                "No signal sender available to emit stopped signal for actor {}",
+                self.path()
+            )))
         }
     }
+        
 
     /// Retrieves a helper object from the actor system.
     /// Actors can use this to access shared resources like database
@@ -656,7 +667,7 @@ mod tests {
         let config = Config::default();
         let context = ActorContext::new(
             actor_path.clone(),
-            Supervisor::default(),
+            SupervicionHandler::default(),
             event_sender,
             None,
             &config,
@@ -714,7 +725,7 @@ mod tests {
         let config = Config::default();
         let context: ActorContext<TestActor> = ActorContext::new(
             actor_path.clone(),
-            Supervisor::default(),
+            SupervicionHandler::default(),
             event_sender,
             None,
             &config,
@@ -767,7 +778,7 @@ mod tests {
             let config = Config::default();
             let mut ctx = ActorContext::new(
                 actor_path,
-                Supervisor::default(),
+                SupervicionHandler::default(),
                 event_sender,
                 None,
                 &config,
@@ -808,7 +819,7 @@ mod tests {
             let config = Config::default();
             let mut ctx = ActorContext::new(
                 actor_path,
-                Supervisor::default(),
+                SupervicionHandler::default(),
                 event_sender,
                 None,
                 &config,

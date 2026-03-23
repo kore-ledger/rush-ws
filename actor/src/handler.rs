@@ -223,7 +223,7 @@ mod tests {
             let mut ctx = ActorContext::new(
                 ActorPath::from("test_actor"),
                 // Dummy supervision handler
-                crate::system::Supervisor::default(),
+                crate::system::SupervicionHandler::default(),
                 tokio::sync::broadcast::channel(10).0,
                 None,
                 &config,
@@ -262,7 +262,7 @@ mod tests {
             let config = Config::default();
             let mut ctx = ActorContext::new(
                 ActorPath::from("test_actor"),
-                crate::system::Supervisor::default(),
+                crate::system::SupervicionHandler::default(),
                 tokio::sync::broadcast::channel(100).0,
                 None,
                 &config,
@@ -357,7 +357,7 @@ mod tests {
         drop(receiver); // Drop receiver to close the channel
         let mut ctx = ActorContext::new(
             ActorPath::from("test_actor"),
-            crate::system::Supervisor::default(),
+            crate::system::SupervicionHandler::default(),
             tokio::sync::broadcast::channel(100).0,
             None,
             &Config::default(),

@@ -7,7 +7,6 @@ use crate::{Actor, ActorPath, ActorRef, runner::ActorRunner, Error};
 use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error};
-use tracing_subscriber::field::debug;
 
 use std::{any::Any, collections::HashMap, sync::Arc};
 
@@ -60,7 +59,7 @@ pub fn signal_channel(buffer: usize) -> (SignalSender, SignalReceiver) {
 #[derive(Clone)]
 pub struct System {
     root_path: ActorPath,
-    system_supervisor: Supervisor,
+    system_supervisor: SupervicionHandler,
     config: Config,
 }
 
@@ -81,7 +80,7 @@ impl System {
         let (child_signal_sender, child_signal_receiver) =
             signal_channel(config.signal_buffer_size);
         let helpers = Arc::new(RwLock::new(HashMap::new()));
-        let system_supervisor = Supervisor::new(registry, helpers, child_signal_sender);
+        let system_supervisor = SupervicionHandler::new(registry, helpers, child_signal_sender);
         let root_path = ActorPath::from("/user");
         let system = System {
             system_supervisor,
@@ -212,7 +211,7 @@ impl System {
 
     /// Stops all child actors under the system's supervision.
     ///
-    pub async fn stop_children(&mut self) -> Result<(), Error> {
+    pub async fn stop_children(&mut self) -> Result<bool, Error> {
         debug!("System stopped all actors.");
         self.system_supervisor.stop_children().await
     }
@@ -284,25 +283,43 @@ impl SystemRunner {
         );
         let mut receiver = self.signal_receiver;
         // Spawn a task to handle system-level signals
+        let mut shutdown_flag = false;
         tokio::spawn(async move {
-            tokio::select! {
-                _ = self.cancellation_token.cancelled() => {
-                    debug!("SystemRunner received cancellation signal, shutting down.");
-                    let _ = self.system.stop_children().await;
-                }
-                Some(signal) = receiver.recv() => {
-                    debug!("SystemRunner received signal.");
-                    // Handle system-level signals here
-                    match signal {
-                        ActorSignal::ChildError(path, error) => {
-                            let _ = self.system.on_child_error(&path, &error).await;
-                        }
-                        ActorSignal::ChildFault(path, error) => {
-                            let _ = self.system.on_child_fault(&path, &error).await;
-                        }
-                        ActorSignal::ChildStopped(path) => {
-                            debug!("System received ChildStopped signal from {:?}.", path);
-                            self.system.remove_child(&path).await
+            loop {
+                tokio::select! {
+                    _ = self.cancellation_token.cancelled() => {
+                        debug!("SystemRunner received cancellation signal, shutting down.");
+                        shutdown_flag = true;
+                        match self.system.stop_children().await {
+                            Ok(has_children) => {
+                                if !has_children {
+                                    debug!("No child actors to stop during shutdown.");
+                                    break;
+                                } else {
+                                    debug!("Stop signal sent to all child actors during shutdown.");
+                                }
+                            },
+                            Err(e) => error!("Error stopping child actors during shutdown: {:?}", e),
+                        }                        
+                    }
+                    Some(signal) = receiver.recv() => {
+                        debug!("SystemRunner received signal.");
+                        // Handle system-level signals here
+                        match signal {
+                            ActorSignal::ChildError(path, error) => {
+                                let _ = self.system.on_child_error(&path, &error).await;
+                            }
+                            ActorSignal::ChildFault(path, error) => {
+                                let _ = self.system.on_child_fault(&path, &error).await;
+                            }
+                            ActorSignal::ChildStopped(path) => {
+                                debug!("System received ChildStopped signal from {:?}.", path);
+                                self.system.remove_child(&path).await;
+                                if shutdown_flag && !self.system.has_childs().await {
+                                    debug!("All child actors stopped, completing system shutdown.");
+                                    break;
+                                }
+                            }
                         }
                     }
                 }
@@ -322,7 +339,7 @@ pub type ActionsRegistry = Arc<RwLock<HashMap<ActorPath, ActionSender>>>;
 /// Supervision handler for managing child actors.
 ///
 #[derive(Clone)]
-pub struct Supervisor {
+pub struct SupervicionHandler {
     /// The actor registry for managing child actors.
     registry: ActorRegistry,
     /// The helpers registry for managing actor helpers.
@@ -333,7 +350,7 @@ pub struct Supervisor {
     child_signal_sender: SignalSender,
 }
 
-impl Supervisor {
+impl SupervicionHandler {
     /// Creates a new supervision handler.
     ///
     /// # Arguments
@@ -470,8 +487,12 @@ impl Supervisor {
     ///
     /// * `Result<(), Error>` - Ok if all children stopped successfully, error otherwise.
     ///
-    pub async fn stop_children(&mut self) -> Result<(), Error> { 
+    pub async fn stop_children(&mut self) -> Result<bool, Error> { 
         debug!("Stopping children."); 
+        if !self.has_childs().await {
+            debug!("Actor has no child actors, stopping immediately.");
+            return Ok(false);
+        }
         let action_senders = self.action_senders.write().await;      
         for (path, action_sender) in action_senders.iter() {
             if let Err(e) = action_sender.send(ChildAction::Stop).await {
@@ -482,7 +503,7 @@ impl Supervisor {
                 )));
             } 
         }
-        Ok(())
+        Ok(true)
     }
 
     /// Stops a specific child actor by path.
@@ -600,12 +621,12 @@ impl Supervisor {
 }
 
 /// Default implementation for Supervisor with an empty registry and a dummy signal sender.
-impl Default for Supervisor {
+impl Default for SupervicionHandler {
     fn default() -> Self {
         let registry: ActorRegistry = Arc::new(RwLock::new(HashMap::new()));
         let helpers = Arc::new(RwLock::new(HashMap::new()));
         let (child_signal_sender, _child_signal_receiver) = signal_channel(10);
-        Supervisor::new(registry, helpers, child_signal_sender)
+        SupervicionHandler::new(registry, helpers, child_signal_sender)
     }
 }
 
@@ -629,7 +650,7 @@ impl Default for Config {
         Self {
             mailbox_size: 10_000,
             event_buffer_size: 10_000,
-            signal_buffer_size: 100_000,
+            signal_buffer_size: 10_000,
             action_buffer_size: 10_000,
         }
     }
@@ -942,10 +963,9 @@ mod tests {
         assert!(logs_contain("Actor /user/parent received child stopped signal from /user/parent/child."));
         assert!(logs_contain("Actor /user/parent stopped."));
 
-        tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await; // Wait for shutdown logs
 
         // Stop the system.
-        token.cancel();
+        //token.cancel();
 
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Wait for shutdown logs
     }

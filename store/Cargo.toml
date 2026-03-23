@@ -14,11 +14,16 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+criterion = { workspace = true, features = ["html_reports"] }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
 tokio-util = { workspace = true }
 tracing-test = { workspace = true }
+
+[[bench]]
+name = "store_benchmarks"
+harness = false
 
 [features]
 default = ["fjall"]
