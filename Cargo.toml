@@ -6,10 +6,6 @@ rust-version.workspace = true
 
 resolver = "2"
 
-[dependencies]
-actor = { path = "actor" }
-store = { path = "store" }
-
 [workspace]
 members = [
     "actor",
@@ -37,3 +33,11 @@ tokio-util = { version = "0.7.16" }
 tracing ={ version = "0.1.41" }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 tracing-test = "0.2"
+
+[dependencies]
+actor = { path = "actor" }
+store = { path = "store" }
+
+[features]
+default = ["fjall"]
+fjall = ["store/fjall"]
