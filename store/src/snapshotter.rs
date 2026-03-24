@@ -116,6 +116,7 @@ impl<S: Store> BaseSnapshotter<S> {
 /// types of messages that can be sent to the snapshotter, including saving a snapshot, loading
 /// a snapshot, and retrieving the last snapshot.
 ///
+#[derive(Clone)]
 pub enum SnapshotMessage {
     /// A message to save a snapshot, containing the key and data of the snapshot to be saved.
     SaveSnapshot { key: u64, data: Vec<u8> },

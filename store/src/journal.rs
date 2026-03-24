@@ -153,28 +153,60 @@ impl<S: Store> BaseJournal<S> {
 
 }
 
+/// Messages that can be sent to the journal actor to perform various operations such as putting
+/// events, retrieving events, and flushing the journal. These messages define the interface for
+/// interacting with the journal actor, allowing other actors to persist and access events in a
+/// standardized way.
+#[derive(Clone)]
 pub enum JournalMessage {
+    /// Message to persist an event in the journal. The event data is provided as a vector of 
+    /// bytes.
     Put(Vec<u8>),
+    /// Message to retrieve an event from the journal by its sequence number.
     Get(u64),
+    /// Message to retrieve the latest event from the journal.
     Last,
+    /// Message to retrieve the latest sequence number from the journal.
     LastSequence,
+    /// Message to retrieve a range of events from the journal. The `from` parameter specifies 
+    /// the starting sequence number, and the optional `to` parameter specifies the ending 
+    /// sequence number. If `to` is `None`, it defaults to the latest sequence number.
     Range(u64, Option<u64>),
+    /// Message to flush the journal's store, ensuring that all pending writes are persisted.
     Flush,
 }
     
 impl Message for JournalMessage {}
 
+/// Responses that the journal actor can return in response to messages. These responses provide
+/// the results of operations performed by the journal actor, such as retrieving events or
+/// confirming that an event was persisted successfully. The responses are designed to be flexible
+/// and can represent various outcomes, including successful retrieval of events, not found cases,
+/// and errors.
 pub enum JournalResponse {
+    /// Response indicating that an event was successfully retrieved from the journal, containing 
+    /// the event data.
     Event(Vec<u8>),
+    /// Response indicating that a range of events was successfully retrieved from the journal, 
+    /// containing the sequence numbers and event data.
     Events(Vec<(u64, Vec<u8>)>),
+    /// Response indicating that the latest event was successfully retrieved from the journal, 
+    /// containing the sequence number and event data.
     Last(u64, Vec<u8>),
+    /// Response indicating that the latest sequence number was successfully retrieved from the 
+    /// journal.
     LastSequence(u64),
+    /// Response indicating that the requested event was not found in the journal.
     NotFound,
+    /// Response indicating that the operation was successful but there is no specific data to 
+    /// return.
     None,
 }
 
 impl Response for JournalResponse {}
 
+/// Implementation of the `Actor` trait for the `BaseJournal` struct. This implementation defines
+/// how the journal actor handles messages and produces responses.
 #[async_trait]
 impl<S: Store> Actor for BaseJournal<S> {
     type Message = JournalMessage;

@@ -352,6 +352,7 @@ mod tests {
     use serde::Deserialize;
     use tokio_util::sync::CancellationToken;
 
+    #[derive(Clone)]
      enum TestMessage {
         Add(String),
         LastSnapshot,
