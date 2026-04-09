@@ -6,9 +6,6 @@ pub use actor::{
     ActorPath,
     ActorRef,
     System,
-    Message,
-    Response,
-    Event,
     Error as ActorError,
 };
 
