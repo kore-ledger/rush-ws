@@ -484,7 +484,6 @@ mod tests {
         system.stop_actor("test_actor").await.unwrap();
 
         // Wait a bit to ensure the actor has stopped and the state is flushed to the stores.
-
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         
         let actor = TestActor { state: Vec::new() };
