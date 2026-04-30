@@ -27,7 +27,7 @@ const MAX_ACTOR_DEPTH: usize = 100;
 pub trait Event: Serialize + DeserializeOwned + Debug + Clone + Send + Sync + 'static {}
 
 /// Defines what an actor will receive as its message, and with what it should respond.
-pub trait Message: Clone + Send + Sync + 'static {}
+pub trait Message: Clone +Send + Sync + 'static {}
 
 /// Defines the response of a message.
 pub trait Response: Send + Sync + 'static {}

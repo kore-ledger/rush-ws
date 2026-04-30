@@ -17,3 +17,8 @@ pub use store::{PersistentActor, Store, StoreManager, DbManager};
 
 #[cfg(feature = "fjall")]
 pub use store::{FjallDbManager, };
+
+#[cfg(test)]
+mod tests {
+    
+}
