@@ -13,7 +13,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.6.5"
+version = "0.6.6"
 edition = "2024"
 rust-version = "1.91.0"
 
@@ -22,13 +22,13 @@ async-trait = { version = "0.1.89" }
 criterion = { version = "0.8.1" }
 crossbeam = "0.8.4"
 futures =  { version = "0.3.31", features = ["async-await"] }
-rkyv = "0.8.15"
+rkyv = "0.8.16"
 serial_test = "3.3.1"
 serde = { version = "1.0.219", default-features = false, features = ["derive"] }
 serde_bare = "0.5.0"
 tempfile = "3.25.0"
 thiserror = { version = "2.0.16" }
-tokio = { version = "1.51.1" }
+tokio = { version = "1.52.3" }
 tokio-util = { version = "0.7.16" }
 tracing ={ version = "0.1.41" }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

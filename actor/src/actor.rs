@@ -291,6 +291,23 @@ impl<A: Actor> ActorContext<A> {
             .await
     }
 
+    /// Gets an actor by path.
+    ///     
+    /// # Arguments
+    /// 
+    /// * `path` - The path of the actor to get.
+    /// 
+    /// # Returns
+    /// 
+    /// * The reference to the actor if found, or None if not found or if the type does not match.
+    ///
+    pub async fn get_actor<B>(&self, path: &ActorPath) -> Option<ActorRef<B>>
+    where
+        B: Actor,
+    {
+        self.actor_supervisor.get_actor(path).await.unwrap_or_default()
+    }
+
     /// Gets a child actor by name.
     ///
     /// # Arguments
@@ -299,7 +316,8 @@ impl<A: Actor> ActorContext<A> {
     ///
     /// # Returns
     ///
-    /// * `Result<Option<ActorRef<B>>, Error>` - The actor reference if found, or None.
+    /// * The reference to the child actor if found, or None if not found or if the type does not 
+    ///   match.
     ///
     pub async fn get_child<B>(&self, name: &str) -> Option<ActorRef<B>>
     where
@@ -307,6 +325,21 @@ impl<A: Actor> ActorContext<A> {
     {
         let child_path = self.path.clone() / name;
         self.actor_supervisor.get_actor(&child_path).await.unwrap_or_default()
+    }
+
+    /// Gets the parent actor.
+    /// 
+    /// # Returns
+    /// 
+    /// * The reference to the parent actor if found, or None if not found or if the type does not 
+    ///   match.
+    ///
+    pub async fn get_parent<B>(&self) -> Option<ActorRef<B>>
+    where
+        B: Actor,
+    {
+        let parent_path = self.path.parent();
+        self.actor_supervisor.get_actor(&parent_path).await.unwrap_or_default()
     }
 
     /// Checks if a child actor exists by name.
