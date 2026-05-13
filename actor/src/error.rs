@@ -36,4 +36,6 @@ pub enum Error {
     /// Retry limit exceeded error.
     #[error("Retry limit exceeded")]
     RetryLimitExceeded,
+    #[error("Unhandled message: {0}")]
+    UnhandledMessage(String),
 }
