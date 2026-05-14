@@ -144,10 +144,6 @@ pub trait PersistentActor: Actor + Debug + Serialize + DeserializeOwned {
             error!("Failed to create snapshotter actor: {}", e);
             return Err(ActorError::Store(format!("Failed to create snapshotter actor: {}", e)));
         }
-        /*ctx.create_child(Journal::new(journal_store), "journal").await
-            .map_err(|e| ActorError::Store(format!("Failed to create journal actor: {}", e)))?;
-        ctx.create_child(Snapshotter::new(snapshotter_store), "snapshotter").await
-            .map_err(|e| ActorError::Store(format!("Failed to create snapshotter actor: {}", e)))?;*/
         Ok(())
     }
 
