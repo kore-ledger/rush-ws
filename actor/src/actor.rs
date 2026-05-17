@@ -634,7 +634,7 @@ where
         retry_strategy: &mut Strategy
     ) -> Result<A::Response, Error>
     {
-        let attempts = 0_usize;
+        let mut attempts = 0_usize;
         while attempts < retry_strategy.max_retries() {
             debug!(
                 "Attempting ask with retry strategy. Attempt {}/{}", 
