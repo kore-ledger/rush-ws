@@ -181,15 +181,15 @@ where
                 Some(signal) = self.signal_receiver.recv() => {
                     // Handle incoming signals.
                     match signal {
-                        ActorSignal::ChildError(child_path, error) => {
+                        ActorSignal::Error(child_path, error) => {
                             error!("Actor {} received child error from {}: {:?}", &self.actor_path, child_path, error);
                             self.actor.on_child_error(&child_path, &error, &mut self.context).await;
                         },
-                        ActorSignal::ChildFault(child_path, error) => {
+                        ActorSignal::Fault(child_path, error) => {
                             error!("Actor {} received child fault from {}.", &self.actor_path, child_path);
                             self.actor.on_child_fault(&child_path, &error, &mut self.context).await;
                         }
-                        ActorSignal::ChildStopped(child_path) => {
+                        ActorSignal::Stopped(child_path) => {
                             debug!("Actor {} received child stopped signal from {}.", &self.actor_path, child_path);
                             self.context.remove_child(&child_path.key()).await;
                             if !self.context.has_childs().await {

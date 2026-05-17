@@ -383,7 +383,13 @@ impl<A: Actor> ActorContext<A> {
         self.actor_supervisor.stop_children().await
     }
 
-    /// 
+    /// Determines if this actor has any child actors.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<bool, Error>` - True if the actor has child actors, false otherwise, or an 
+    ///   error if the check failed.
+    ///
     pub async fn has_childs(&self) -> bool {
         self.actor_supervisor.has_childs().await
     }
@@ -447,7 +453,7 @@ impl<A: Actor> ActorContext<A> {
     pub async fn emit_error(&self, error: &Error) -> Result<(), Error> {
         if let Some(signal_sender) = &self.signal_sender
             && let Err(e) = signal_sender
-                .send(ActorSignal::ChildError(self.path.clone(), error.clone()))
+                .send(ActorSignal::Error(self.path.clone(), error.clone()))
                 .await
         {
             //
@@ -470,7 +476,7 @@ impl<A: Actor> ActorContext<A> {
     pub async fn emit_fault(&self, error: &Error) -> Result<(), Error> {
         if let Some(signal_sender) = &self.signal_sender
             && let Err(e) = signal_sender
-                .send(ActorSignal::ChildFault(self.path.clone(), error.clone()))
+                .send(ActorSignal::Fault(self.path.clone(), error.clone()))
                 .await
         {
             error!("Failed to emit fault signal: {}", e);
@@ -493,7 +499,7 @@ impl<A: Actor> ActorContext<A> {
         if let Some(signal_sender) = &self.signal_sender {
             debug!("Emitting stopped signal for actor {}", self.path());
             if let Err(e) = signal_sender
-                .send(ActorSignal::ChildStopped(self.path.clone()))
+                .send(ActorSignal::Stopped(self.path.clone()))
                 .await
             {
                 error!("Failed to emit stopped signal: {}", e);
@@ -640,6 +646,7 @@ where
                 Err(e) => {
                     error!("Ask failed with error: {:?}. Attempt {}/{}", e, attempts + 1, retry_strategy.max_retries());
                     if let Some(backoff) = retry_strategy.next_backoff() {
+                        attempts += 1;
                         tokio::time::sleep(backoff).await;
                     }
                 }

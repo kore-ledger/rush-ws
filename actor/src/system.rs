@@ -12,7 +12,9 @@ use std::{any::Any, collections::HashMap, sync::Arc};
 
 /// Actions that can be taken on a child actor.
 pub enum ChildAction {
+    /// Action to stop the child actor.
     Stop,
+    /// Action to restart the child actor.
     Restart,
 }
 
@@ -28,11 +30,11 @@ pub fn action_channel(buffer: usize) -> (ActionSender, ActionReceiver) {
 /// Actor signals for supervision and lifecycle management.
 pub enum ActorSignal {
     /// Signal indicating a child actor encountered an error.
-    ChildError(ActorPath, Error),
+    Error(ActorPath, Error),
     /// Signal indicating a child actor encountered a fault.
-    ChildFault(ActorPath, Error),
+    Fault(ActorPath, Error),
     /// Signal indicating a child actor stopped.
-    ChildStopped(ActorPath),
+    Stopped(ActorPath),
 }
 
 /// Type aliases for signal sender.
@@ -306,13 +308,13 @@ impl SystemRunner {
                         debug!("SystemRunner received signal.");
                         // Handle system-level signals here
                         match signal {
-                            ActorSignal::ChildError(path, error) => {
+                            ActorSignal::Error(path, error) => {
                                 let _ = self.system.on_child_error(&path, &error).await;
                             }
-                            ActorSignal::ChildFault(path, error) => {
+                            ActorSignal::Fault(path, error) => {
                                 let _ = self.system.on_child_fault(&path, &error).await;
                             }
-                            ActorSignal::ChildStopped(path) => {
+                            ActorSignal::Stopped(path) => {
                                 debug!("System received ChildStopped signal from {:?}.", path);
                                 self.system.remove_child(&path).await;
                                 if shutdown_flag && !self.system.has_childs().await {
