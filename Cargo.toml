@@ -41,3 +41,7 @@ store = { path = "store" }
 [features]
 default = ["fjall"]
 fjall = ["store/fjall"]
+
+[profile.release]
+opt-level = 3
+debug = false

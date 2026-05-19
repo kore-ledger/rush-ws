@@ -29,6 +29,7 @@ Features: `default = ["fjall"]` (disk-backed store); use `--features memory` for
 - Root `rush` crate re-exports both as public API.
 
 Non-obvious wiring:
+
 - `System` root path is always `/user` (hardcoded)
 - `MAX_ACTOR_DEPTH = 100` hard limit
 - Helper system via `add_helper`/`get_helper` for DI. `StoreManager` **must** be registered as helper `"storage"` before any `PersistentActor` starts.
