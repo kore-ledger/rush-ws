@@ -3,8 +3,12 @@
 //! This module provides the main actor system, responsible for
 //! managing actors, supervision and lifecycle signals.
 
-use crate::{Actor, ActorPath, ActorRef, runner::ActorRunner, Error};
-use tokio::sync::{RwLock, mpsc, oneshot};
+use crate::{
+    Actor, ActorPath, ActorRef, Event, Error,
+    runner::ActorRunner,
+    event::{EventManager, EventHandler}
+};
+use tokio::sync::{RwLock, mpsc, oneshot, broadcast::Receiver as EventReceiver};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error};
 
@@ -253,6 +257,20 @@ impl System {
     {
         self.system_supervisor.get_helper(name).await
     }
+
+    pub async fn add_event_handler<E>(
+        &self,
+        handler: impl EventHandler<E>,
+        receiver: EventReceiver<E>,
+    ) 
+    where
+        E: Event,
+    {
+        let mut event_manager = EventManager::new(handler, receiver);
+        tokio::spawn(async move {
+            event_manager.start().await;
+        });
+    }
     
 }
 
@@ -278,6 +296,10 @@ impl SystemRunner {
         }
     }
 
+    /// Runs the system runner, listening for signals and handling lifecycle events.
+    /// This method will run indefinitely until the cancellation token is triggered or the 
+    /// signal channel is closed.
+    /// 
     pub fn run(mut self) {
         debug!(
             "SystemRunner started for actor system with root path: {:?}",

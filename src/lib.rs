@@ -10,6 +10,7 @@ pub use actor::{
     Message,
     Response,
     Event,
+    EventHandler,
     Error as ActorError,
 };
 

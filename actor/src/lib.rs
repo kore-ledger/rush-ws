@@ -13,6 +13,7 @@
 
 mod actor;
 mod error;
+mod event;
 mod handler;
 mod path;
 mod runner;
@@ -23,3 +24,4 @@ pub use actor::{Actor, ActorContext, ActorRef, Event, Message, Response, DummyEv
 pub use error::Error;
 pub use path::ActorPath;
 pub use system::{Config, System};
+pub use event::EventHandler;
