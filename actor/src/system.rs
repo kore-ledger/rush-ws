@@ -258,6 +258,13 @@ impl System {
         self.system_supervisor.get_helper(name).await
     }
 
+    /// Adds an event handler to the system to process events emitted by actors.
+    /// 
+    /// # Arguments
+    ///
+    /// * `handler` - The event handler to process events.
+    /// * `receiver` - The event receiver to receive events.
+    ///
     pub async fn add_event_handler<E>(
         &self,
         handler: impl EventHandler<E>,
@@ -751,6 +758,38 @@ mod tests {
             Ok(())
         }
     }
+
+    pub struct TestHandler;
+
+    #[async_trait::async_trait]
+    impl EventHandler<String> for TestHandler {
+        async fn notify(&self, event: String) {
+            debug!("TestHandler received event: {}", event);
+            assert_eq!(event, "event1".to_owned());
+        }
+    }   
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_event_handler() {
+                let token = CancellationToken::new();
+        let mut system = System::new(Config::default(), token.clone());
+        // Create an actor.
+        let actor_ref = system.create_actor(TestActor, "test_actor").await.unwrap();
+        system
+            .add_event_handler(TestHandler, actor_ref.subscribe())
+            .await;
+        
+        // Send a message that triggers an event
+        let response = actor_ref.ask("event1".to_owned()).await.unwrap();
+        assert_eq!(response, "Received: event1");
+
+        assert!(logs_contain("TestHandler received event: event1"));
+
+        // Clean up
+        token.cancel();
+    
+    }  
 
     #[tokio::test]
     #[traced_test]
