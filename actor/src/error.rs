@@ -9,6 +9,9 @@ use thiserror::Error;
 /// such as when sending messages, starting actors, or handling messages.
 #[derive(Error, Debug, Clone)]
 pub enum Error {
+    /// Error when an actor is not found.
+    #[error("Actor not found: {0}")]
+    ActorNotFound(String),  
     /// Error when sending a message to an actor fails.
     #[error("Failed to send message to actor: {0}")]
     SendMessage(String),
