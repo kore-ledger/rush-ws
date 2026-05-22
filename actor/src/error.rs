@@ -41,4 +41,6 @@ pub enum Error {
     RetryLimitExceeded,
     #[error("Unhandled message: {0}")]
     UnhandledMessage(String),
+    #[error("Invalid response")]
+    InvalidResponse,
 }
