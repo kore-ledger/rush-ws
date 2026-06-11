@@ -23,7 +23,7 @@ criterion = { version = "0.8.1" }
 crossbeam = "0.8.4"
 futures =  { version = "0.3.31", features = ["async-await"] }
 rkyv = "0.8.16"
-serial_test = "3.3.1"
+serial_test = "3.5.0"
 serde = { version = "1.0.219", default-features = false, features = ["derive"] }
 serde_bare = "0.5.0"
 tempfile = "3.25.0"
