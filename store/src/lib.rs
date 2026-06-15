@@ -9,12 +9,14 @@
 mod error;
 mod journal;
 mod persist;
+mod snapshot;
 mod snapshotter;
 mod stores;
 
 pub use error::Error;
 pub use persist::PersistentActor;
 pub use journal::{Journal, JournalMessage, JournalResponse};
+pub use snapshot::{Snapshot, SnapshotMessage, SnapshotResponse};
 pub use stores::{DbManager, Store, StoreManager};
 pub use snapshotter::{Snapshotter, SnapshotMessage, SnapshotResponse};
 

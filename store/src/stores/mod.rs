@@ -115,7 +115,7 @@ pub trait Store: Sync + Send + 'static {
     ///
     fn get(&self, key: u64) -> Result<Vec<u8>, Error>;
 
-    /// Associates the given value with the given key.
+    /// Associates the given value with the given key. If the key exists, it will be overwritten.
     ///
     /// # Arguments
     ///
