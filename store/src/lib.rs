@@ -16,7 +16,7 @@ mod stores;
 pub use error::Error;
 pub use persist::PersistentActor;
 pub use journal::{Journal, JournalMessage, JournalResponse};
-pub use snapshot::{SnapshotActor, SnapshotMessage, SnapshotResponse};
+pub use snapshot::SnapshotActor;
 pub use stores::{DbManager, Store, StoreManager};
 pub use snapshotter::{Snapshotter, SnapshotMessage, SnapshotResponse};
 
