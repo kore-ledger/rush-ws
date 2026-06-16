@@ -268,6 +268,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_snapshot_actor() {
         // Initialize the actor system and store manager for testing.
         let token = CancellationToken::new();

@@ -380,7 +380,7 @@ impl<A: Actor> ActorContext<A> {
     ///   actors to stop, false if there were no child actors, error otherwise.
     ///
     pub async fn stop_children(&mut self) -> Result<bool, Error> {
-        self.actor_supervisor.stop_children().await
+        self.actor_supervisor.stop_children(&self.path).await
     }
 
     /// Determines if this actor has any child actors.
@@ -391,7 +391,7 @@ impl<A: Actor> ActorContext<A> {
     ///   error if the check failed.
     ///
     pub async fn has_childs(&self) -> bool {
-        self.actor_supervisor.has_childs().await
+        self.actor_supervisor.has_childs(&self.path).await
     }
 
     /// Removes a child actor by name. 

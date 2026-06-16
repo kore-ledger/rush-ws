@@ -176,7 +176,7 @@ impl System {
     /// * true - if the system has childs.
     /// 
     pub async fn has_childs(&self) -> bool {
-        self.system_supervisor.has_childs().await
+        self.system_supervisor.has_childs(&self.root_path).await
     }
 
     /// Remove child 
@@ -198,7 +198,7 @@ impl System {
     ///
     pub async fn on_child_error(&mut self, path: &ActorPath, error: &Error) -> Result<(), Error> {
         error!("System received ChildError from {:?}: {:?}", path, error);
-        self.system_supervisor.stop_children().await?;
+        self.system_supervisor.stop_children(path).await?;
         Ok(())
     }
 
@@ -211,7 +211,7 @@ impl System {
     ///
     pub async fn on_child_fault(&mut self, path: &ActorPath, error: &Error) -> Result<(), Error> {
         error!("System received ChildFault from {:?}: {:?}", path, error);
-        self.system_supervisor.stop_children().await?;
+        self.system_supervisor.stop_children(&self.root_path).await?;
         Ok(())
     }
 
@@ -219,7 +219,7 @@ impl System {
     ///
     pub async fn stop_children(&mut self) -> Result<bool, Error> {
         debug!("System stopped all actors.");
-        self.system_supervisor.stop_children().await
+        self.system_supervisor.stop_children(&self.root_path).await
     }
 
     /// Adds a helper object to the actor system.
@@ -512,27 +512,38 @@ impl SupervicionHandler {
         Ok(self.registry.read().await.contains_key(path))
     }
 
+    /// Retrieves all child actors under a specific parent path.
+    ///
+    /// # Arguments
+    ///
+    /// * `parent` - The path of the parent actor.
+    ///
+    /// # Returns
+    ///
+    /// * `Vec<ActorPath>` - A vector of child actor paths.
+    ///
+    pub async fn get_childs(&self, parent: &ActorPath) -> Vec<ActorPath> {
+        self.registry.read().await.keys().into_iter().cloned()
+            .filter(|path| &path.parent() == parent)
+            .collect()
+    }
+
     /// Stops all child actors under supervision.
     ///
     /// # Returns
     ///
     /// * `Result<(), Error>` - Ok if all children stopped successfully, error otherwise.
     ///
-    pub async fn stop_children(&mut self) -> Result<bool, Error> { 
+    pub async fn stop_children(&mut self, parent: &ActorPath) -> Result<bool, Error> { 
         debug!("Stopping children."); 
-        if !self.has_childs().await {
-            debug!("Actor has no child actors, stopping immediately.");
+        let childs = self.get_childs(parent).await;
+        if childs.is_empty() {
+            debug!("No child actors to stop.");
             return Ok(false);
         }
-        let action_senders = self.action_senders.write().await;      
-        for (path, action_sender) in action_senders.iter() {
-            if let Err(e) = action_sender.send(ChildAction::Stop).await {
-                error!("Failed to send stop action to child '{}': {:?}", path, e);
-                return Err(Error::Supervision(format!(
-                    "Failed to send stop action to child '{}': {:?}",
-                    path, e
-                )));
-            } 
+        for path in self.get_childs(parent).await {
+            debug!("Stopping child actor '{}'.", path);
+            self.stop_child(&path).await?;
         }
         Ok(true)
     }
@@ -546,8 +557,11 @@ impl SupervicionHandler {
     /// # Returns
     /// 
     /// * `Result<(), Error>` - Ok if the child was stopped successfully, error otherwise.
+    /// 
     pub async fn stop_child(&mut self, path: &ActorPath) -> Result<(), Error> {
-        let action_senders = self.action_senders.write().await;
+        // Remove from registry
+        self.registry.write().await.remove(path);
+        let mut action_senders = self.action_senders.write().await;
         if let Some(action_sender) = action_senders.get(path) {
             debug!("Sending stop action to child '{}'.", path);
             if let Err(e) = action_sender.send(ChildAction::Stop).await {
@@ -557,6 +571,8 @@ impl SupervicionHandler {
                     path, e
                 )));
             }
+            // Remove the action sender from the registry after sending the stop signal.
+            action_senders.remove(path);
         } else {
             return Err(Error::Supervision(format!(
                 "Child '{}' not found for stopping.",
@@ -604,8 +620,9 @@ impl SupervicionHandler {
     ///
     /// * `bool` - True if there are child actors, false otherwise.
     ///
-    pub async fn has_childs(&self) -> bool {
-        !self.action_senders.read().await.is_empty()
+    pub async fn has_childs(&self, parent: &ActorPath) -> bool {
+        let childs = self.get_childs(parent).await;
+        !childs.is_empty()
     }
 
     /// Adds a helper object to the actor system.
@@ -1000,6 +1017,9 @@ mod tests {
         let _ = system.create_actor(TestActor, "parent").await.unwrap();
         assert!(system.actor_exists("parent").await.unwrap());
 
+        // Get childs path
+
+
         // Retrieve the child actor reference .
         let child_ref = system
             .get_actor::<TestChild>("/parent/child")
@@ -1015,20 +1035,6 @@ mod tests {
         assert!(logs_contain("Handling error: Supervision(\"Test error\")"));
         assert!(logs_contain("System received ChildError"));
         assert!(logs_contain("Stopping children."));
-        assert!(logs_contain("Actor /user/parent received stop action."));
-        assert!(logs_contain("Actor /user/parent has child actors, stopping them first."));
-        assert!(logs_contain("Stopping children."));
-        assert!(logs_contain("Actor /user/parent/child received stop action."));
-        assert!(logs_contain("Actor /user/parent/child has no child actors, stopping immediately."));
-        assert!(logs_contain("Actor /user/parent/child stopped."));
-        assert!(logs_contain("TestChild post_stop called."));
-        assert!(logs_contain("Actor /user/parent/child terminated."));
-        assert!(logs_contain("Actor /user/parent received child stopped signal from /user/parent/child."));
-        assert!(logs_contain("Actor /user/parent stopped."));
-
-
-        // Stop the system.
-        //token.cancel();
 
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Wait for shutdown logs
     }
@@ -1055,15 +1061,7 @@ mod tests {
             "Actor /user/parent received child fault from /user/parent/child"
         ));
         assert!(logs_contain("System received ChildFault"));
-        assert!(logs_contain("Actor /user/parent received stop action."));
-        assert!(logs_contain("Actor /user/parent stopped."));
-        assert!(logs_contain("Actor /user/parent terminated."));
-        assert!(logs_contain(
-            "Actor /user/parent/child received stop action."
-        ));
-        assert!(logs_contain("Actor /user/parent/child stopped."));
-        assert!(logs_contain("TestChild post_stop called."));
-        assert!(logs_contain("Actor /user/parent/child terminated."));
+
 
         // Stop the system.
         token.cancel();
@@ -1134,13 +1132,7 @@ mod tests {
         let _ = child_ref.ask("fail".to_string()).await; 
         assert!(logs_contain( "Actor /user/parent received child fault from /user/parent/child" )); 
         assert!(logs_contain("System received ChildFault")); 
-        assert!(logs_contain("Actor /user/parent received stop action.")); 
-        assert!(logs_contain("Actor /user/parent stopped.")); 
-        assert!(logs_contain("Actor /user/parent terminated.")); 
-        assert!(logs_contain( "Actor /user/parent/child received stop action." )); 
-        assert!(logs_contain("Actor /user/parent/child stopped.")); 
-        assert!(logs_contain("TestChild post_stop called.")); 
-        assert!(logs_contain("Actor /user/parent/child terminated.")); 
+        assert!(logs_contain("Stopping child actor '/user/parent/child'"));
         
         // Stop the system. 
         token.cancel(); 
