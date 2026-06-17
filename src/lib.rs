@@ -11,6 +11,7 @@ pub use actor::{
     Response,
     Event,
     EventHandler,
+    DummyEvent,
     Error as ActorError,
 };
 
