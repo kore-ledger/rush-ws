@@ -285,7 +285,7 @@ impl System {
 ///
 struct SystemRunner {
     /// The actor system instance to manage.
-    system: System,
+    system: Arc<RwLock<System>>,
     signal_receiver: SignalReceiver,
     cancellation_token: CancellationToken,
 }
@@ -297,7 +297,7 @@ impl SystemRunner {
         cancellation_token: CancellationToken,
     ) -> Self {
         Self {
-            system,
+            system: Arc::new(RwLock::new(system)),
             signal_receiver,
             cancellation_token,
         }
@@ -307,11 +307,8 @@ impl SystemRunner {
     /// This method will run indefinitely until the cancellation token is triggered or the 
     /// signal channel is closed.
     /// 
-    pub fn run(mut self) {
-        debug!(
-            "SystemRunner started for actor system with root path: {:?}",
-            self.system.root_path
-        );
+    pub fn run(self) {
+        debug!("SystemRunner started.");
         let mut receiver = self.signal_receiver;
         // Spawn a task to handle system-level signals
         let mut shutdown_flag = false;
@@ -321,7 +318,8 @@ impl SystemRunner {
                     _ = self.cancellation_token.cancelled() => {
                         debug!("SystemRunner received cancellation signal, shutting down.");
                         shutdown_flag = true;
-                        match self.system.stop_children().await {
+                        let mut system = self.system.write().await;
+                        match system.stop_children().await {
                             Ok(has_children) => {
                                 if !has_children {
                                     debug!("No child actors to stop during shutdown.");
@@ -336,17 +334,18 @@ impl SystemRunner {
                     Some(signal) = receiver.recv() => {
                         debug!("SystemRunner received signal.");
                         // Handle system-level signals here
+                        let mut system = self.system.write().await;
                         match signal {
                             ActorSignal::Error(path, error) => {
-                                let _ = self.system.on_child_error(&path, &error).await;
+                                let _ = system.on_child_error(&path, &error).await;
                             }
                             ActorSignal::Fault(path, error) => {
-                                let _ = self.system.on_child_fault(&path, &error).await;
+                                let _ = system.on_child_fault(&path, &error).await;
                             }
                             ActorSignal::Stopped(path) => {
                                 debug!("System received ChildStopped signal from {:?}.", path);
-                                self.system.remove_child(&path).await;
-                                if shutdown_flag && !self.system.has_childs().await {
+                                system.remove_child(&path).await;
+                                if shutdown_flag && !system.has_childs().await {
                                     debug!("All child actors stopped, completing system shutdown.");
                                     break;
                                 }
@@ -814,7 +813,7 @@ mod tests {
         let token = CancellationToken::new();
         let mut system = System::new(Config::default(), token.clone());
         assert!(logs_contain(
-            "SystemRunner started for actor system with root path: /user"
+            "SystemRunner started."
         ));
         assert!(logs_contain("Actor system created with root path: /user"));
 
