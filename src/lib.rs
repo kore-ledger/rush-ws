@@ -18,7 +18,7 @@ pub use actor::{
 pub use store::{PersistentActor, Store, StoreManager, DbManager, SnapshotActor,};
 
 #[cfg(feature = "fjall")]
-pub use store::{FjallDbManager, };
+pub use store::{FjallDbManager, Error as StoreError};
 
 #[cfg(test)]
 mod tests {
