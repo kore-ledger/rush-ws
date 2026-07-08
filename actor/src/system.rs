@@ -10,6 +10,7 @@ use crate::{
 };
 use tokio::sync::{RwLock, mpsc, oneshot, broadcast::Receiver as EventReceiver};
 use tokio_util::sync::CancellationToken;
+use serde::Deserialize;
 use tracing::{debug, error};
 
 use std::{any::Any, collections::HashMap, sync::Arc};
@@ -678,7 +679,7 @@ impl Default for SupervicionHandler {
 }
 
 /// Configuration for the actor system, including mailbox and buffer sizes.
-#[derive(Clone)]
+#[derive(Clone, Deserialize)]
 pub struct Config {
     /// The size of the mailbox for each actor.
     pub mailbox_size: usize,
