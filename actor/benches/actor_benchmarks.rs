@@ -34,6 +34,7 @@ struct NoopActor;
 struct NoopEvent;
 impl Event for NoopEvent {}
 
+#[derive(Clone)]
 struct NoopMessage;
 impl Message for NoopMessage {}
 
@@ -78,6 +79,7 @@ impl Message for CounterMessage {}
 #[derive(Debug, Clone)]
 enum CounterResponse {
     Ack,
+    #[allow(dead_code)]
     Count(u64),
 }
 impl Response for CounterResponse {}

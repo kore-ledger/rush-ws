@@ -57,6 +57,7 @@ struct CounterEvent {
 
 impl Event for CounterEvent {}
 
+#[derive(Clone)]
 enum CounterMessage {
     /// Persist one increment event and wait for the sequence number.
     Increment(u64),
