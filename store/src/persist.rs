@@ -237,6 +237,39 @@ pub trait PersistentActor: Actor + Debug + Serialize + DeserializeOwned {
         }
     }
 
+    /// Get the last persisted event and its sequence number from the journal.
+    /// 
+    /// # Arguments
+    /// 
+    /// * `ctx` - The actor context, used to access the child actors.
+    /// 
+    /// # Returns
+    /// 
+    /// * `Result<(u64, Self::Event), ActorError>` - Ok with the sequence number and event if 
+    ///   successful, or an error if there was a problem retrieving the last event.
+    /// 
+    async fn last_event(
+        &mut self, 
+        ctx: &mut ActorContext<Self>
+    ) -> Result<(u64, Self::Event), ActorError> {
+        if let Some(journal) = self.journal(ctx).await {
+            let response = journal.ask(JournalMessage::Last).await
+                .map_err(|e| {
+                    error!("Failed to send last sequence request to journal: {}", e);
+                    ActorError::Store(format!("Failed to send last sequence request to journal: {}", e))
+                })?;
+            if let JournalResponse::Last(seq, bytes) = response {
+                Ok((seq, from_slice(&bytes)
+                    .map_err(|e| ActorError::Serialization(format!("Failed to deserialize event: {}", e)))?))
+            } else {
+                Err(ActorError::Store("Unexpected response when requesting last sequence from journal".to_string()))
+            }
+        } else {
+            error!("Journal actor not found, failed to get last sequence");
+            Err(ActorError::Store("Journal not found".to_string()))
+        }
+    }
+
     /// Flush the journal and snapshotter to ensure all data is persisted to the underlying stores.
     /// This method is used to ensure that all events and snapshots are written to the underlying 
     /// storage, providing durability guarantees for the actor's state.
@@ -354,13 +387,14 @@ mod tests {
         LastSnapshot,
         Snapshot,
         GetAll,
+        LastEvent,
     }
 
     impl Message for TestMessage {}
     
     #[derive(Clone, Debug, Serialize, Deserialize)]
     struct TestEvent {
-        value: String,
+        pub value: String,
     }
 
     impl Event for TestEvent {}
@@ -369,6 +403,7 @@ mod tests {
         All(Vec<String>),
         Snapshot(Option<(u64, TestActor)>),
         None,
+        LastEvent(Option<(u64, TestEvent)>),
     }
 
     impl Response for TestResponse {}
@@ -422,6 +457,9 @@ mod tests {
                     self.snapshot(ctx).await?;
                     Ok(TestResponse::None)
                 },
+                TestMessage::LastEvent => {
+                    Ok(TestResponse::LastEvent(self.last_event(ctx).await.ok()))
+                }
             }
         }
     }
@@ -498,6 +536,15 @@ mod tests {
             assert_eq!(state, vec!["event1".to_string(), "event2".to_string(), "event3".to_string()]);
         } else {
             panic!("Unexpected response");
+        }
+
+        // Get the last persisted event and its sequence number.
+        let response = actor_ref.ask(TestMessage::LastEvent).await.unwrap();
+        if let TestResponse::LastEvent(Some((sn, event))) = response {
+            assert_eq!(sn, 3);
+            assert_eq!(event.value, "event3".to_string());
+        } else {
+            panic!("Failed to get last event");
         }
 
         system.stop_children().await.unwrap();
