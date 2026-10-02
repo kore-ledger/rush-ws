@@ -15,7 +15,10 @@ pub use actor::{
     Error as ActorError,
 };
 
-pub use store::{PersistentActor, Store, StoreManager, DbManager, SnapshotActor,};
+pub use store::{
+    PersistentActor, Store, StoreManager, DbManager, SnapshotActor, 
+    JournalMessage, JournalResponse, Journal,
+};
 
 #[cfg(feature = "fjall")]
 pub use store::{FjallDbManager, Error as StoreError};
