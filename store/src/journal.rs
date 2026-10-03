@@ -116,6 +116,30 @@ impl<S: Store> BaseJournal<S> {
             .map(|event| (self.latest_sequence, event))
     }
 
+    /// Removes an event from the journal for a specific sequence number. This method allows actors
+    /// to delete previously persisted events.
+    /// 
+    /// # Arguments
+    /// 
+    /// * `sequence` - The sequence number of the event to remove.
+    /// 
+    /// # Returns
+    /// 
+    /// A `Result` containing the data of the removed event, or an `ActorError` if the removal fails.
+    /// On success, it returns `Ok(Vec<u8>)` with the data of the removed event. On failure, it 
+    /// returns an `ActorError` with a message describing the error.
+    /// 
+    pub fn remove(&mut self, sequence: u64) -> Result<Vec<u8>, ActorError> {
+        let value = self.get(sequence)?;
+        self.store.del(sequence)
+            .map_err(|e| {
+                error!("Failed to remove event from journal: {}", e);
+                ActorError::Store(
+                    format!("Failed to remove event: {}", e))
+            })?;
+        Ok(value)
+    }
+
     /// Retrieves a range of events from the journal based on the provided sequence numbers. 
     /// This method allows actors to access a subset of previously persisted events.
     /// 
@@ -134,6 +158,8 @@ impl<S: Store> BaseJournal<S> {
         let options = IteratorOptions::Range { from, to };
         self.store.iter(options).collect::<Vec<(u64, Vec<u8>)>>()
     }
+
+
 
     /// Flushes the journal's store to ensure that all pending writes are persisted. This 
     /// method is typically called during shutdown to ensure that all events are saved properly.
@@ -174,6 +200,8 @@ pub enum JournalMessage {
     Range(u64, Option<u64>),
     /// Message to flush the journal's store, ensuring that all pending writes are persisted.
     Flush,
+    /// Message to remove an event from the journal by its sequence number.
+    Remove(u64),
 }
     
 impl Message for JournalMessage {}
@@ -242,6 +270,10 @@ impl<S: Store> Actor for BaseJournal<S> {
                     None => Ok(JournalResponse::NotFound),
                 }
             },
+            JournalMessage::Remove(sequence) => {
+                let event = self.remove(sequence)?;
+                Ok(JournalResponse::Event(event))
+            }
             JournalMessage::LastSequence => {
                 let seq = self.latest_sequence();
                 Ok(JournalResponse::LastSequence(seq))
@@ -313,6 +345,16 @@ mod tests {
                 }
             },
             _ => panic!("Expected JournalResponse::Events"),
+        }
+
+        // Test removing an event from the journal
+        let response = journal.ask(JournalMessage::Remove(3)).await.unwrap();
+        match response {
+            JournalResponse::Event(data) => {
+                let expected_event = format!("test event {}", 3).into_bytes();
+                assert_eq!(data, expected_event);
+            },
+            _ => panic!("Expected JournalResponse::Event"),
         }
 
         // Test flushing the journal

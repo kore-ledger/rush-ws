@@ -270,6 +270,40 @@ pub trait PersistentActor: Actor + Debug + Serialize + DeserializeOwned {
         }
     }
 
+    /// Remove an event from the journal by its sequence number.
+    /// 
+    /// # Arguments
+    /// 
+    /// * `ctx` - The actor context, used to access the child actors.
+    /// * `sequence` - The sequence number of the event to be removed.
+    /// 
+    /// # Returns
+    /// 
+    /// * `Result<Vec<u8>, ActorError>` - Ok with the removed event's bytes if successful, or an 
+    ///   error if there was a problem removing the event.
+    ///
+    async fn remove_event(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        sequence: u64
+    ) -> Result<Vec<u8>, ActorError> {
+        if let Some(journal) = self.journal(ctx).await {
+            let response = journal.ask(JournalMessage::Remove(sequence)).await
+                .map_err(|e| {
+                    error!("Failed to send remove request to journal: {}", e);
+                    ActorError::Store(format!("Failed to send remove request to journal: {}", e))
+                })?;
+            if let JournalResponse::Event(bytes) = response {
+                Ok(bytes)
+            } else {
+                Err(ActorError::Store("Unexpected response when requesting remove from journal".to_string()))
+            }
+        } else {
+            error!("Journal actor not found, failed to remove event");
+            Err(ActorError::Store("Journal not found".to_string()))
+        }
+    }
+
     /// Flush the journal and snapshotter to ensure all data is persisted to the underlying stores.
     /// This method is used to ensure that all events and snapshots are written to the underlying 
     /// storage, providing durability guarantees for the actor's state.
