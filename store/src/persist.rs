@@ -185,20 +185,17 @@ pub trait PersistentActor: Actor + Debug + Serialize + DeserializeOwned {
     /// 
     /// # Returns
     /// 
-    /// * `Option<u64>` - The last sequence number of the events in the journal, or None if the journal
-    ///   actor was not found or an error occurred.
+    /// * `Result<u64, ActorError>` - The last sequence number of the events in the journal, or 
+    ///   an error if it could not be retrieved.
     ///
-    async fn last_sequence(&self, ctx: &mut ActorContext<Self>) -> Option<u64> {
+    async fn last_sequence(&self, ctx: &mut ActorContext<Self>) -> Result<u64, ActorError> {
         if let Some(journal) = self.journal(ctx).await {
-            let response: JournalResponse = journal.ask(JournalMessage::LastSequence).await.ok()?;
+            let response: JournalResponse = journal.ask(JournalMessage::LastSequence).await?;
             if let JournalResponse::LastSequence(seq) = response {
-                Some(seq)
-            } else {
-                None
-            }
-        } else {
-            None
-        }
+                return Ok(seq);
+            } 
+        } 
+        Err(ActorError::Store("Journal not found".to_string()))
     }
 
     /// Persist an event to the journal.
@@ -357,7 +354,7 @@ pub trait PersistentActor: Actor + Debug + Serialize + DeserializeOwned {
     ///
     async fn snapshot(&mut self, ctx: &mut ActorContext<Self>) -> Result<(), ActorError> {
         let sn = self.last_sequence(ctx).await
-            .ok_or_else(|| {
+            .map_err(|_| {
                 error!("Failed to get last journal sequence, cannot create snapshot");
                 ActorError::Store("Failed to get last journal sequence".to_string())
             })?;
