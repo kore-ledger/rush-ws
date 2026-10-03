@@ -286,7 +286,7 @@ pub trait PersistentActor: Actor + Debug + Serialize + DeserializeOwned {
         &mut self,
         ctx: &mut ActorContext<Self>,
         sequence: u64
-    ) -> Result<Vec<u8>, ActorError> {
+    ) -> Result<Self::Event, ActorError> {
         if let Some(journal) = self.journal(ctx).await {
             let response = journal.ask(JournalMessage::Remove(sequence)).await
                 .map_err(|e| {
@@ -294,7 +294,9 @@ pub trait PersistentActor: Actor + Debug + Serialize + DeserializeOwned {
                     ActorError::Store(format!("Failed to send remove request to journal: {}", e))
                 })?;
             if let JournalResponse::Event(bytes) = response {
-                Ok(bytes)
+                let event = from_slice(&bytes)
+                    .map_err(|e| ActorError::Serialization(format!("Failed to deserialize event: {}", e)))?; 
+                Ok(event)
             } else {
                 Err(ActorError::Store("Unexpected response when requesting remove from journal".to_string()))
             }
