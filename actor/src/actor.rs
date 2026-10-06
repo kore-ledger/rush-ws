@@ -438,7 +438,7 @@ impl<A: Actor> ActorContext<A> {
     pub fn emit_event(&self, event: <A as Actor>::Event) -> Result<(), Error> {
         if let Err(e) = self.event_sender.send(event) {
             error!("Failed to emit event: {}", e);
-            Err(Error::SendEvent(format!("Failed to emit event: {}", e)))
+            Err(Error::Event(format!("Failed to emit event: {}", e)))
         } else {
             Ok(())
         }
@@ -458,7 +458,7 @@ impl<A: Actor> ActorContext<A> {
         {
             //
             error!("Failed to emit error signal: {}", e);
-            Err(Error::SendEvent(format!(
+            Err(Error::Event(format!(
                 "Failed to emit error signal: {}",
                 e
             )))
@@ -480,7 +480,7 @@ impl<A: Actor> ActorContext<A> {
                 .await
         {
             error!("Failed to emit fault signal: {}", e);
-            Err(Error::SendEvent(format!(
+            Err(Error::Event(format!(
                 "Failed to emit fault signal: {}",
                 e
             )))
@@ -503,7 +503,7 @@ impl<A: Actor> ActorContext<A> {
                 .await
             {
                 error!("Failed to emit stopped signal: {}", e);
-                Err(Error::SendEvent(format!(
+                Err(Error::Event(format!(
                     "Failed to emit stopped signal: {}",
                     e
                 )))
@@ -513,7 +513,7 @@ impl<A: Actor> ActorContext<A> {
 
         } else {
             error!("No signal sender available to emit stopped signal for actor {}", self.path());
-            Err(Error::SendEvent(format!(
+            Err(Error::Event(format!(
                 "No signal sender available to emit stopped signal for actor {}",
                 self.path()
             )))
@@ -939,7 +939,7 @@ mod tests {
         ) -> Result<Self::Response, Error> {
             if self.fail_count < self.fail_threshold {
                 self.fail_count += 1;
-                Err(Error::SendMessage("Simulated failure".into()))
+                Err(Error::Message("Simulated failure".into()))
             } else {
                 Ok(TestResponse::Pong)
             }

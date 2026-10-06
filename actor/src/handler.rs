@@ -128,7 +128,7 @@ impl<A: Actor> HandlerHelper<A> {
         let msg = ActorMessage::new(sender, message, None);
         if let Err(error) = self.sender.send(msg).await {
             debug!("Failed to tell message! {}", error.to_string());
-            Err(Error::SendMessage(error.to_string()))
+            Err(Error::Message(error.to_string()))
         } else {
             debug!("Message sent successfully.");
             Ok(())
@@ -162,11 +162,11 @@ impl<A: Actor> HandlerHelper<A> {
         let msg = ActorMessage::new(sender, message, Some(response_sender));
         if let Err(error) = self.sender.send(msg).await {
             error!("Failed to ask message! {}", error.to_string());
-            Err(Error::SendMessage(error.to_string()))
+            Err(Error::Message(error.to_string()))
         } else {
             response_receiver
                 .await
-                .map_err(|error| Error::SendMessage(error.to_string()))?
+                .map_err(|error| Error::Message(error.to_string()))?
         }
     }
 }

@@ -14,7 +14,7 @@ pub enum Error {
     ActorNotFound(String),  
     /// Error when sending a message to an actor fails.
     #[error("Failed to send message to actor: {0}")]
-    SendMessage(String),
+    Message(String),
     /// Error when starting an actor fails.
     #[error("Failed to start actor: {0}")]
     StartActor(String),
@@ -23,7 +23,7 @@ pub enum Error {
     CreateActor(String),
     /// Error when emitting an event fails.
     #[error("Sending event failed: {0}")]
-    SendEvent(String),
+    Event(String),
     /// Supervision error.
     #[error("Supervision error: {0}")]
     Supervision(String),
