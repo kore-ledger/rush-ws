@@ -303,6 +303,48 @@ pub trait PersistentActor: Actor + Debug + Serialize + DeserializeOwned {
         }
     }
 
+    /// Get a range of events from the journal.
+    ///
+    /// # Arguments
+    ///
+    /// * `ctx` - The actor context, used to access the child actors.
+    /// * `from_sequence` - The starting sequence number of the events to retrieve.
+    /// * `to_sequence` - The optional ending sequence number of the events to retrieve.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<Vec<Self::Event>, ActorError>` - Ok with the list of events if successful, or an 
+    ///   error if there was a problem retrieving the events.
+    /// 
+    async fn get_events(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        from_sequence: u64,
+        to_sequence: Option<u64>
+    ) -> Result<Vec<Self::Event>, ActorError> {
+        if let Some(journal) = self.journal(ctx).await {
+            let response = journal.ask(JournalMessage::Range(from_sequence, to_sequence)).await
+                .map_err(|e| {
+                    error!("Failed to send get events request to journal: {}", e);
+                    ActorError::Store(format!("Failed to send get events request to journal: {}", e))
+                })?;
+            if let JournalResponse::Events(records) = response {
+                let mut events = Vec::new();
+                for (_, bytes) in records {
+                    let event = from_slice(&bytes)
+                        .map_err(|e| ActorError::Serialization(format!("Failed to deserialize event: {}", e)))?;
+                    events.push(event);
+                }
+                Ok(events)
+            } else {
+                Err(ActorError::Store("Unexpected response when requesting events from journal".to_string()))
+            }
+        } else {
+            error!("Journal actor not found, failed to get events");
+            Err(ActorError::Store("Journal not found".to_string()))
+        }
+    }
+
     /// Flush the journal and snapshotter to ensure all data is persisted to the underlying stores.
     /// This method is used to ensure that all events and snapshots are written to the underlying 
     /// storage, providing durability guarantees for the actor's state.
