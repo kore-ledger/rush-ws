@@ -462,6 +462,10 @@ mod tests {
         LastSnapshot,
         Snapshot,
         GetAll,
+        Range {
+            from_sequence: u64,
+            to_sequence: Option<u64>,
+        },
         LastEvent,
     }
 
@@ -479,6 +483,7 @@ mod tests {
         Snapshot(Option<(u64, TestActor)>),
         None,
         LastEvent(Option<(u64, TestEvent)>),
+        Events(Vec<TestEvent>),
     }
 
     impl Response for TestResponse {}
@@ -535,6 +540,9 @@ mod tests {
                 TestMessage::LastEvent => {
                     Ok(TestResponse::LastEvent(self.last_event(ctx).await.ok()))
                 }
+                TestMessage::Range { from_sequence, to_sequence } => {
+                    Ok(TestResponse::Events(self.get_events(ctx, from_sequence, to_sequence).await?))
+                }                                                               
             }
         }
     }
@@ -620,6 +628,17 @@ mod tests {
             assert_eq!(event.value, "event3".to_string());
         } else {
             panic!("Failed to get last event");
+        }
+
+        // Get a range of events from the journal.
+        let response = actor_ref.ask(TestMessage::Range { from_sequence: 1, to_sequence: Some(3) }).await.unwrap();
+        if let TestResponse::Events(events) = response {
+            assert_eq!(events.len(), 3);
+            assert_eq!(events[0].value, "event1".to_string());
+            assert_eq!(events[1].value, "event2".to_string());
+            assert_eq!(events[2].value, "event3".to_string());
+        } else {
+            panic!("Failed to get events range");
         }
 
         system.stop_children().await.unwrap();
