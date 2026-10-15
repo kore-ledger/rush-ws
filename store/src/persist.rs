@@ -248,23 +248,25 @@ pub trait PersistentActor: Actor + Debug + Serialize + DeserializeOwned {
     async fn last_event(
         &mut self, 
         ctx: &mut ActorContext<Self>
-    ) -> Result<(u64, Self::Event), ActorError> {
+    ) -> Option<(u64, Self::Event)> {
         if let Some(journal) = self.journal(ctx).await {
             let response = journal.ask(JournalMessage::Last).await
-                .map_err(|e| {
-                    error!("Failed to send last sequence request to journal: {}", e);
-                    ActorError::Store(format!("Failed to send last sequence request to journal: {}", e))
-                })?;
+                .ok()?;
             if let JournalResponse::Last(seq, bytes) = response {
-                let event: Self::Event = from_slice(&bytes)
-                    .map_err(|e| ActorError::Serialization(format!("Failed to deserialize event: {}", e)))?;
-                Ok((seq, event))
+                match from_slice(&bytes) {
+                    Ok(event) => Some((seq, event)),
+                    Err(e) => {
+                        println!("Deserialization error: {}", e);
+                        error!("Failed to deserialize last event from journal: {}", e);
+                        None
+                    },
+                }
             } else {
-                Err(ActorError::Store("Unexpected response when requesting last sequence from journal".to_string()))
+                None
             }
         } else {
             error!("Journal actor not found, failed to get last sequence");
-            Err(ActorError::Store("Journal not found".to_string()))
+            None
         }
     }
 
@@ -539,7 +541,7 @@ mod tests {
                     Ok(TestResponse::None)
                 },
                 TestMessage::LastEvent => {
-                    Ok(TestResponse::LastEvent(self.last_event(ctx).await.ok()))
+                    Ok(TestResponse::LastEvent(self.last_event(ctx).await))
                 }
                 TestMessage::Range { from_sequence, to_sequence } => {
                     Ok(TestResponse::Events(self.get_events(ctx, from_sequence, to_sequence).await?))
