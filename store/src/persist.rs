@@ -6,7 +6,7 @@ use crate::{
 
 use actor::{Actor, ActorContext, ActorRef, Error as ActorError};
 use serde::{Serialize, de::DeserializeOwned};
-use serde_bare::{to_vec, from_slice};
+use rmp_serde::{to_vec, from_slice};
 use async_trait::async_trait;
 use tracing::{debug, error};
 use std::fmt::Debug;

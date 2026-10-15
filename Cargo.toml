@@ -13,7 +13,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.8.19"
+version = "0.8.20"
 edition = "2024"
 rust-version = "1.91.0"
 
@@ -24,7 +24,6 @@ crossbeam = "0.8.5"
 futures =  { version = "0.3.31", features = ["async-await"] }
 serial_test = "4.0.1"
 serde = { version = "1.0.219", default-features = false, features = ["derive"] }
-serde_bare = "0.5.0"
 tempfile = "3.25.0"
 thiserror = { version = "2.0.21" }
 tokio = { version = "1.53.3" }
