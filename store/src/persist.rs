@@ -256,8 +256,9 @@ pub trait PersistentActor: Actor + Debug + Serialize + DeserializeOwned {
                     ActorError::Store(format!("Failed to send last sequence request to journal: {}", e))
                 })?;
             if let JournalResponse::Last(seq, bytes) = response {
-                Ok((seq, from_slice(&bytes)
-                    .map_err(|e| ActorError::Serialization(format!("Failed to deserialize event: {}", e)))?))
+                let event: Self::Event = from_slice(&bytes)
+                    .map_err(|e| ActorError::Serialization(format!("Failed to deserialize event: {}", e)))?;
+                Ok((seq, event))
             } else {
                 Err(ActorError::Store("Unexpected response when requesting last sequence from journal".to_string()))
             }
