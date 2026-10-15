@@ -565,7 +565,8 @@ mod tests {
     async fn test_persistent_actor() {
         let token = CancellationToken::new();
         let mut system = System::new(Config::default(), token);
-        let manager = StoreManager::default();
+        let path = tempfile::tempdir().unwrap();
+        let manager = StoreManager::new(path.path().to_str().unwrap()).unwrap();
         system.add_helper("storage", manager.clone()).await;
 
         // Create the actor.
@@ -631,7 +632,7 @@ mod tests {
         }
 
         // Get a range of events from the journal.
-        let response = actor_ref.ask(TestMessage::Range { from_sequence: 1, to_sequence: Some(3) }).await.unwrap();
+        let response = actor_ref.ask(TestMessage::Range { from_sequence: 1, to_sequence: None }).await.unwrap();
         if let TestResponse::Events(events) = response {
             assert_eq!(events.len(), 3);
             assert_eq!(events[0].value, "event1".to_string());
@@ -647,4 +648,37 @@ mod tests {
         manager.drop().unwrap();
     }
 
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_persist_error_1() {
+        let token = CancellationToken::new();
+        let mut system = System::new(Config::default(), token);
+        let path = tempfile::tempdir().unwrap();
+        let manager = StoreManager::new(path.path().to_str().unwrap()).unwrap();
+        system.add_helper("storage", manager.clone()).await;
+
+        // Create the actor.
+        let actor = TestActor { state: Vec::new() };
+        let actor_ref = system.create_actor(actor, "test_actor").await.unwrap();
+
+        // Initially, the actor should have no events.
+        let response = actor_ref.ask(TestMessage::Range { from_sequence: 0, to_sequence: None }).await.unwrap();
+        if let TestResponse::Events(events) = response {
+            assert_eq!(events.len(), 0);
+        } else {
+            panic!("Unexpected response");
+        }
+
+        // Send a message.
+        actor_ref.tell(TestMessage::Add("event1".to_string())).await.unwrap();
+
+        // Get all events. 
+        let response = actor_ref.ask(TestMessage::Range { from_sequence: 0, to_sequence: None }).await.unwrap();
+        if let TestResponse::Events(events) = response {
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].value, "event1".to_string());
+        } else {
+            panic!("Failed to get events range");
+        }
+    }
 }
