@@ -26,14 +26,22 @@ pub struct FjallDbManager {
 }
 
 impl FjallDbManager {
+
     /// Creates a new `FjallDbManager` with the specified database path.
+    /// 
+    /// # Arguments
+    /// 
+    /// - `path`: The file system path to the Fjall database.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database could not be opened.
+    /// 
     pub fn new(path: &str) -> Result<Self, Error> {
         let path = PathBuf::from(&path);
-        let db = Database::builder(&path).open()
-            .map_err(|e| Error::Store(format!("failed to open Fjall database -> {}", e)))?;
+        let db = Database::builder(&path).open()?;
         Ok(Self { path, db })
     }
-
 }
 
 impl DbManager<FjallStore> for FjallDbManager {
@@ -41,15 +49,12 @@ impl DbManager<FjallStore> for FjallDbManager {
     fn create_store(&self, name: &str, prefix: &str) -> Result<FjallStore, Error> {
         let keyspace = self.db.keyspace(name, || {
             KeyspaceCreateOptions::default()
-        }) 
-            .map_err(|e| Error::Store(format!("failed to create fjall keyspace -> {}", e)))?;
+        })?;
         Ok(FjallStore { name: name.to_owned(), keyspace, prefix: prefix.to_owned() })
     }
 
     fn drop(self) -> Result<(), Error> {
-       std::fs::remove_dir_all(&self.path)
-            .map_err(|e| Error::Store(format!("failed to drop fjall database -> {}", e)))?;
-        Ok(())
+       Ok(std::fs::remove_dir_all(&self.path)?)
     }
 }
 
@@ -65,10 +70,7 @@ pub struct FjallStore {
 impl FjallStore {
 
     pub fn into_key_value(guard: Guard) -> Result<(u64, Vec<u8>), Error> {
-        let (key, value) = guard.into_inner()
-            .map_err(|e| Error::Reading(
-                format!("failed to read key/value from fjall -> {}", e)
-            ))?;
+        let (key, value) = guard.into_inner()?;
         let key_str = String::from_utf8_lossy(&key);
         let key_num = key_str.split(':').next_back()
             .and_then(|s| s.parse::<u64>().ok())
@@ -115,8 +117,7 @@ impl Store for FjallStore {
 
     fn get(&self, key: u64) -> Result<Vec<u8>, Error> {
         let key = format!("{}:{:014}", self.prefix, key);
-        let value = self.keyspace.get(key.as_bytes())
-            .map_err(|e| Error::Reading(format!("failed to get value from fjall -> {}", e)))?;
+        let value = self.keyspace.get(key.as_bytes())?;
         let value = value.map(|v| v.to_vec());
         match value {
             Some(v) => Ok(v),
@@ -126,16 +127,12 @@ impl Store for FjallStore {
 
     fn put(&mut self, key: u64, data: &[u8]) -> Result<(), Error> {
         let key = format!("{}:{:014}", self.prefix, key);
-        self.keyspace.insert(key, data)
-            .map_err(|e| Error::Writing(format!("failed to put value into fjall -> {}", e)))?;
-        Ok(())
+        Ok(self.keyspace.insert(key, data)?)
     }
 
     fn del(&mut self, key: u64) -> Result<(), Error> {
         let key = format!("{}:{:014}", self.prefix, key);
-        self.keyspace.remove(key)
-            .map_err(|e| Error::Writing(format!("failed to delete value from fjall -> {}", e)))?;
-        Ok(())
+        Ok(self.keyspace.remove(key)?)
     }
 
     fn last(&self) -> Option<(u64, Vec<u8>)> {
@@ -156,14 +153,8 @@ impl Store for FjallStore {
     fn purge(&mut self) -> Result<(), Error> {
         let iter = self.keyspace.prefix(&self.prefix);
         for guard in iter {
-            let key = guard.key()
-                .map_err(|err| Error::Reading(
-                    format!("failed to read key from fjall during purge -> {}", err)
-                ))?;           
-            self.keyspace.remove(key)
-                .map_err(|e| Error::Writing(
-                    format!("failed to delete value from fjall -> {}", e)
-                ))?;
+            let key = guard.key()?;           
+            self.keyspace.remove(key)?;
         }
         Ok(())
     }

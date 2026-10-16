@@ -80,6 +80,29 @@ impl<S: Store> BaseJournal<S> {
             })
     }
 
+    /// Inserts an event at a specific sequence number in the journal. This method allows actors
+    /// to add events at a particular position, which can be useful for replaying or correcting
+    /// the event history.
+    /// 
+    /// # Arguments
+    /// 
+    /// * `sequence` - The sequence number at which to insert the event.
+    /// * `data` - The event data to be inserted.
+    /// 
+    /// # Returns
+    /// 
+    /// A `Result` indicating whether the event was successfully inserted or if an error occurred.
+    /// On success, it returns `Ok(())`. On failure, it returns an `ActorError` with a message 
+    /// describing the error.
+    pub fn insert(&mut self, sequence: u64, data: &[u8]) -> Result<(), ActorError> {
+        self.store.put(sequence, data)
+            .map_err(|e| {
+                error!("Failed to insert event in journal: {}", e);
+                ActorError::Store(
+                    format!("Failed to insert event: {}", e))
+            })
+    }
+
     /// Retrieves data from the journal for a specific sequence number. This method allows actors
     /// to access previously persisted events.
     /// 
@@ -188,6 +211,9 @@ pub enum JournalMessage {
     /// Message to persist an event in the journal. The event data is provided as a vector of 
     /// bytes.
     Put(Vec<u8>),
+    /// Message to insert an event at a specific sequence number in the journal. The sequence number
+    /// and event data are provided.
+    Insert(u64, Vec<u8>),
     /// Message to retrieve an event from the journal by its sequence number.
     Get(u64),
     /// Message to retrieve the latest event from the journal.
@@ -253,6 +279,14 @@ impl<S: Store> Actor for BaseJournal<S> {
                     Ok(_) => Ok(JournalResponse::LastSequence(self.latest_sequence)),
                     Err(e) => Err(ActorError::Store(
                         format!("Failed to put event in journal: {}", e)
+                    )),
+                }
+            },
+            JournalMessage::Insert(seq, event) => {
+                match self.insert(seq, &event) {
+                    Ok(_) => Ok(JournalResponse::None),
+                    Err(e) => Err(ActorError::Store(
+                        format!("Failed to insert event in journal: {}", e)
                     )),
                 }
             },
@@ -354,6 +388,20 @@ mod tests {
                 let expected_event = format!("test event {}", 3).into_bytes();
                 assert_eq!(data, expected_event);
             },
+            _ => panic!("Expected JournalResponse::Event"),
+        }
+
+        // Test inserting an event at a specific sequence number
+        let event = format!("new test event {}", 3).into_bytes();
+        let response = journal.ask(JournalMessage::Insert(3, event.clone())).await.unwrap();
+        match response {
+            JournalResponse::None => {},
+            _ => panic!("Expected JournalResponse::None"),
+        }
+        // Verify that the event was inserted correctly
+        let response = journal.ask(JournalMessage::Get(3)).await.unwrap();
+        match response {
+            JournalResponse::Event(data) => assert_eq!(data, event),
             _ => panic!("Expected JournalResponse::Event"),
         }
 

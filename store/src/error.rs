@@ -1,9 +1,11 @@
 //
 
 use thiserror::Error;
+use fjall::Error as FjallError;
+use std::io::Error as IoError;
 
 /// Errors for `persist` package.
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, Error)]
 pub enum Error {
     /// Error when create store
     #[error("Create store: {0}")]
@@ -21,5 +23,11 @@ pub enum Error {
     #[error("Entry not found: {0}")]
     EntryNotFound(String),
     #[error("Serialization error: {0}")]
-    Serialization(String),  
+    Serialization(String),
+    /// Fjall database error.
+    #[error("Fjall error: {0}")]
+    Fjall(#[from] FjallError),
+    /// IO error.
+    #[error("IO error: {0}")]
+    Io(#[from] IoError),
 }

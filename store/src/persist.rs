@@ -306,6 +306,44 @@ pub trait PersistentActor: Actor + Debug + Serialize + DeserializeOwned {
         }
     }
 
+    /// Insert an event into the journal at a specific sequence number.
+    ///
+    /// # Arguments
+    ///
+    /// * `ctx` - The actor context, used to access the child actors.
+    /// * `sequence` - The sequence number at which to insert the new event.
+    /// * `new_event` - The event to be inserted.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<(), ActorError>` - Ok if the insertion was successful, or an error if there was 
+    ///   a problem.
+    /// 
+    async fn insert_event(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        sequence: u64,
+        new_event: Self::Event
+    ) -> Result<(), ActorError> {
+        if let Some(journal) = self.journal(ctx).await {
+            let bytes = to_vec(&new_event)
+                .map_err(|e| ActorError::Serialization(format!("Failed to serialize event: {}", e)))?;
+            let response = journal.ask(JournalMessage::Insert(sequence, bytes)).await
+                .map_err(|e| {
+                    error!("Failed to send insert request to journal: {}", e);
+                    ActorError::Store(format!("Failed to send insert request to journal: {}", e))
+                })?;
+            if let JournalResponse::None = response {
+                Ok(())
+            } else {
+                Err(ActorError::Store("Unexpected response when requesting insert to journal".to_string()))
+            }
+        } else {
+            error!("Journal actor not found, failed to insert event");
+            Err(ActorError::Store("Journal not found".to_string()))
+        }
+    }
+
     /// Get a range of events from the journal.
     ///
     /// # Arguments
@@ -344,6 +382,30 @@ pub trait PersistentActor: Actor + Debug + Serialize + DeserializeOwned {
             }
         } else {
             error!("Journal actor not found, failed to get events");
+            Err(ActorError::Store("Journal not found".to_string()))
+        }
+    }
+
+    async fn get_event(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        sequence: u64
+    ) -> Result<Self::Event, ActorError> {
+        if let Some(journal) = self.journal(ctx).await {
+            let response = journal.ask(JournalMessage::Get(sequence)).await
+                .map_err(|e| {
+                    error!("Failed to send get event request to journal: {}", e);
+                    ActorError::Store(format!("Failed to send get event request to journal: {}", e))
+                })?;
+            if let JournalResponse::Event(bytes) = response {
+                let event = from_slice(&bytes)
+                    .map_err(|e| ActorError::Serialization(format!("Failed to deserialize event: {}", e)))?;
+                Ok(event)
+            } else {
+                Err(ActorError::Store("Unexpected response when requesting event from journal".to_string()))
+            }
+        } else {
+            error!("Journal actor not found, failed to get event");
             Err(ActorError::Store("Journal not found".to_string()))
         }
     }
@@ -462,6 +524,8 @@ mod tests {
     #[derive(Clone)]
      enum TestMessage {
         Add(String),
+        Insert(u64, String),
+        Get(u64),
         LastSnapshot,
         Snapshot,
         GetAll,
@@ -487,6 +551,7 @@ mod tests {
         None,
         LastEvent(Option<(u64, TestEvent)>),
         Events(Vec<TestEvent>),
+        Event(TestEvent),
     }
 
     impl Response for TestResponse {}
@@ -534,7 +599,7 @@ mod tests {
                 },
                 TestMessage::LastSnapshot => {
                     Ok(TestResponse::Snapshot(self.last_snapshot(ctx).await))
-                }
+                },
                 TestMessage::Snapshot => {
                     //let sn = self.state.len() as u64;
                     self.snapshot(ctx).await?;
@@ -542,10 +607,18 @@ mod tests {
                 },
                 TestMessage::LastEvent => {
                     Ok(TestResponse::LastEvent(self.last_event(ctx).await))
-                }
+                },
                 TestMessage::Range { from_sequence, to_sequence } => {
                     Ok(TestResponse::Events(self.get_events(ctx, from_sequence, to_sequence).await?))
-                }                                                               
+                },
+                TestMessage::Insert(sequence, new_event) => {
+                    self.insert_event(ctx, sequence, TestEvent { value: new_event }).await?;
+                    Ok(TestResponse::None)
+                },
+                TestMessage::Get(sequence) => {
+                    let event = self.get_event(ctx, sequence).await?;
+                    Ok(TestResponse::Event(event))
+                },
             }
         }
     }
@@ -645,6 +718,22 @@ mod tests {
             panic!("Failed to get events range");
         }
 
+        // Insert a new event at a specific sequence number and verify it.
+        let response = actor_ref.ask(TestMessage::Insert(2, "event1.5".to_string())).await.unwrap();
+        if let TestResponse::None = response {
+        } else {
+            panic!("Failed to insert event");
+        }
+
+        // Verify the insertion by getting the event
+        let response = actor_ref.ask(TestMessage::Get(2)).await.unwrap();
+        if let TestResponse::Event(event) = response {
+            assert_eq!(event.value, "event1.5".to_string());
+        } else {
+            panic!("Failed to get inserted event");
+        }
+
+        // Stop the system and clean up.
         system.stop_children().await.unwrap();
 
         tokio::time::sleep(std::time::Duration::from_millis(800)).await;

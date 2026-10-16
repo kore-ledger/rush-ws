@@ -205,7 +205,6 @@ macro_rules! test_store_trait {
         #[cfg(test)]
         mod $name {
             use super::*;
-            use $crate::error::Error;
 
             #[test]
             #[serial_test::serial]
@@ -238,12 +237,8 @@ macro_rules! test_store_trait {
                     manager.create_store("test", "test").unwrap();
                 Store::put(&mut store, 1, b"value").unwrap();
                 Store::del(&mut store, 1).unwrap();
-                assert_eq!(
-                    Store::get(&store, 1),
-                    Err(Error::EntryNotFound(
-                        "Key not found: test:00000000000001".to_owned()
-                    ))
-                );
+                let value = Store::get(&store, 1);
+                assert!(value.is_err());
                 assert!(manager.stop().is_ok());
                 assert!(manager.drop().is_ok());
             }
@@ -418,18 +413,12 @@ macro_rules! test_store_trait {
                 Store::put(&mut store, 1, b"value1").unwrap();
                 Store::put(&mut store, 2, b"value2").unwrap();
                 Store::put(&mut store, 3, b"value3").unwrap();
-                assert_eq!(
-                    Store::get(&store, 1),
-                    Ok(b"value1".to_vec())
-                );
-                assert_eq!(
-                    Store::get(&store, 2),
-                    Ok(b"value2".to_vec())
-                );
-                assert_eq!(
-                    Store::get(&store, 3),
-                    Ok(b"value3".to_vec())
-                );
+                let value = Store::get(&store, 1).unwrap();
+                assert_eq!(value, b"value1".to_vec());
+                let value = Store::get(&store, 2).unwrap();
+                assert_eq!(value, b"value2".to_vec());
+                let value = Store::get(&store, 3).unwrap();
+                assert_eq!(value, b"value3".to_vec());
                 Store::purge(&mut store).unwrap();
                 let mut iter = store.iter(IteratorOptions::Forward { from: None, count: None });
                 assert_eq!(iter.next(), None);
