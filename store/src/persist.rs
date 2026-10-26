@@ -135,12 +135,12 @@ pub trait PersistentActor: Actor + Debug + Serialize + DeserializeOwned {
         let snapshotter_store = store_manager.create_store(&snapshotter_name, &self.id())
             .map_err(|e| ActorError::Store(format!("Failed to create snapshotter store: {}", e)))?;
         if let Err(e) = ctx.create_child(Journal::new(journal_store), "journal").await {
-            //println!("Failed to create journal actor: {}", e);
+            println!("Failed to create journal actor: {}", e);
             error!("Failed to create journal actor: {}", e);
             return Err(ActorError::Store(format!("Failed to create journal actor: {}", e)));
         }
         if let Err(e) = ctx.create_child(Snapshotter::new(snapshotter_store), "snapshotter").await {
-            //println!("Failed to create snapshotter actor: {}", e);
+            println!("Failed to create snapshotter actor: {}", e);
             error!("Failed to create snapshotter actor: {}", e);
             return Err(ActorError::Store(format!("Failed to create snapshotter actor: {}", e)));
         }
@@ -267,42 +267,6 @@ pub trait PersistentActor: Actor + Debug + Serialize + DeserializeOwned {
         } else {
             error!("Journal actor not found, failed to get last sequence");
             None
-        }
-    }
-
-    /// Remove an event from the journal by its sequence number.
-    /// 
-    /// # Arguments
-    /// 
-    /// * `ctx` - The actor context, used to access the child actors.
-    /// * `sequence` - The sequence number of the event to be removed.
-    /// 
-    /// # Returns
-    /// 
-    /// * `Result<Vec<u8>, ActorError>` - Ok with the removed event's bytes if successful, or an 
-    ///   error if there was a problem removing the event.
-    ///
-    async fn remove_event(
-        &mut self,
-        ctx: &mut ActorContext<Self>,
-        sequence: u64
-    ) -> Result<Self::Event, ActorError> {
-        if let Some(journal) = self.journal(ctx).await {
-            let response = journal.ask(JournalMessage::Remove(sequence)).await
-                .map_err(|e| {
-                    error!("Failed to send remove request to journal: {}", e);
-                    ActorError::Store(format!("Failed to send remove request to journal: {}", e))
-                })?;
-            if let JournalResponse::Event(bytes) = response {
-                let event = from_slice(&bytes)
-                    .map_err(|e| ActorError::Serialization(format!("Failed to deserialize event: {}", e)))?; 
-                Ok(event)
-            } else {
-                Err(ActorError::Store("Unexpected response when requesting remove from journal".to_string()))
-            }
-        } else {
-            error!("Journal actor not found, failed to remove event");
-            Err(ActorError::Store("Journal not found".to_string()))
         }
     }
 
@@ -591,7 +555,7 @@ mod tests {
                 TestMessage::Add(value) => {
                     let event = TestEvent { value: value.clone() };
                     let sn = self.persist(&event, ctx).await?;
-                    assert_eq!(sn, self.state.len() as u64);
+                    assert_eq!(sn + 1, self.state.len() as u64);
                     Ok(TestResponse::None)
                 },
                 TestMessage::GetAll => {
@@ -668,7 +632,7 @@ mod tests {
         // Get the last snapshot
         let response = actor_ref.ask(TestMessage::LastSnapshot).await.unwrap();
         if let TestResponse::Snapshot(Some((sn, snapshot))) = response {
-            assert_eq!(sn, 2);
+            assert_eq!(sn, 1);
             assert_eq!(snapshot.state, vec!["event1".to_string(), "event2".to_string()]);
         } else {
             panic!("Failed to get last snapshot");
@@ -701,14 +665,14 @@ mod tests {
         // Get the last persisted event and its sequence number.
         let response = actor_ref.ask(TestMessage::LastEvent).await.unwrap();
         if let TestResponse::LastEvent(Some((sn, event))) = response {
-            assert_eq!(sn, 3);
+            assert_eq!(sn, 2);
             assert_eq!(event.value, "event3".to_string());
         } else {
             panic!("Failed to get last event");
         }
 
         // Get a range of events from the journal.
-        let response = actor_ref.ask(TestMessage::Range { from_sequence: 1, to_sequence: None }).await.unwrap();
+        let response = actor_ref.ask(TestMessage::Range { from_sequence: 0, to_sequence: None }).await.unwrap();
         if let TestResponse::Events(events) = response {
             assert_eq!(events.len(), 3);
             assert_eq!(events[0].value, "event1".to_string());

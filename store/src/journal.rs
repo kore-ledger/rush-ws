@@ -8,7 +8,15 @@ use crate::stores::memory::MemoryStore;
 
 use actor::{Actor, ActorContext, ActorPath, DummyEvent, Error as ActorError, Message, Response};
 use async_trait::async_trait;
+use tokio::{
+    fs::File,
+    //io::AsyncReadExt,
+    io::{self, AsyncWriteExt, AsyncReadExt, BufWriter, BufReader},
+};
+use async_compression::tokio::write::{GzipEncoder, GzipDecoder};
 use tracing::error;
+
+use std::path::Path;
 
 #[cfg(feature = "memory")]
 pub type Journal = BaseJournal<MemoryStore>;
@@ -24,8 +32,8 @@ pub type Journal = BaseJournal<FjallStore>;
 pub struct BaseJournal<S: Store> {
     /// The underlying store used for persisting events.
     store: S,
-    /// The latest sequence number of the events.
-    latest_sequence: u64,    
+    /// The next sequence number of the events.
+    next_sequence: u64,    
 }
 
 impl<S: Store> BaseJournal<S> {
@@ -37,24 +45,28 @@ impl<S: Store> BaseJournal<S> {
     /// 
     /// # Returns
     /// 
-    /// A new instance of `BaseJournal` initialized with the provided store, and the latest
-    /// sequence set to the latest sequence from the store.
+    /// A new instance of `BaseJournal` initialized with the provided store, and the next
+    /// sequence set to the next sequence from the store.
     /// 
     pub fn new(store: S) -> Self {
-        let mut latest_sequence = 0_u64;
+        let mut next_sequence = 0_u64;
         if let Some((seq, _)) = store.last() {
-            latest_sequence = seq;
-        }
+            next_sequence = seq + 1;
+        } 
         Self {
             store,
-            latest_sequence,
+            next_sequence,
         }
     }
 
+    
     /// Retrieves the latest sequence number of the data stored in the journal. This method allows
     /// actors to know up to which point they have replayed.
     pub fn latest_sequence(&self) -> u64 {
-        self.latest_sequence
+        if self.next_sequence == 0 {
+            return 0;
+        }
+        self.next_sequence - 1
     }
 
     /// Persists data in the journal by storing it in the underlying store and updating the latest
@@ -71,13 +83,14 @@ impl<S: Store> BaseJournal<S> {
     /// On success, it returns `Ok(())`. On failure, it returns an `ActorError` with a message 
     /// describing the error.
     pub fn put(&mut self, data: &[u8]) -> Result<(), ActorError> {
-        self.latest_sequence += 1;
-        self.store.put(self.latest_sequence, data)
+        self.store.put(self.next_sequence, data)
             .map_err(|e| {
                 error!("Failed to store event in journal: {}", e);
                 ActorError::Store(
                     format!("Failed to store event: {}", e))
-            })
+            })?;
+        self.next_sequence += 1;
+        Ok(())
     }
 
     /// Inserts an event at a specific sequence number in the journal. This method allows actors
@@ -135,32 +148,8 @@ impl<S: Store> BaseJournal<S> {
     /// latest event. If no events are present, it returns `Ok(None)`. On failure, it returns an
     /// `ActorError` with a message describing the error.
     pub fn last(&self) -> Option<(u64, Vec<u8>)> {
-        self.get(self.latest_sequence).ok()
-            .map(|event| (self.latest_sequence, event))
-    }
-
-    /// Removes an event from the journal for a specific sequence number. This method allows actors
-    /// to delete previously persisted events.
-    /// 
-    /// # Arguments
-    /// 
-    /// * `sequence` - The sequence number of the event to remove.
-    /// 
-    /// # Returns
-    /// 
-    /// A `Result` containing the data of the removed event, or an `ActorError` if the removal fails.
-    /// On success, it returns `Ok(Vec<u8>)` with the data of the removed event. On failure, it 
-    /// returns an `ActorError` with a message describing the error.
-    /// 
-    pub fn remove(&mut self, sequence: u64) -> Result<Vec<u8>, ActorError> {
-        let value = self.get(sequence)?;
-        self.store.del(sequence)
-            .map_err(|e| {
-                error!("Failed to remove event from journal: {}", e);
-                ActorError::Store(
-                    format!("Failed to remove event: {}", e))
-            })?;
-        Ok(value)
+        self.get(self.latest_sequence()).ok()
+            .map(|event| (self.latest_sequence(), event))
     }
 
     /// Retrieves a range of events from the journal based on the provided sequence numbers. 
@@ -178,11 +167,10 @@ impl<S: Store> BaseJournal<S> {
     /// On failure, it returns an `ActorError` with a message describing the error.
     ///
     pub fn range(&self, from: u64, to: Option<u64>) -> Vec<(u64, Vec<u8>)> {
-        let options = IteratorOptions::Range { from, to };
+        let to = to.unwrap_or_else(|| self.latest_sequence());
+        let options = IteratorOptions::Range { from, to: Some(to) };
         self.store.iter(options).collect::<Vec<(u64, Vec<u8>)>>()
     }
-
-
 
     /// Flushes the journal's store to ensure that all pending writes are persisted. This 
     /// method is typically called during shutdown to ensure that all events are saved properly.
@@ -200,6 +188,111 @@ impl<S: Store> BaseJournal<S> {
             })
     }
 
+    /// Exports all events from the journal to a specified path. Use the prefix like file name. 
+    /// 
+    /// # Arguments
+    /// 
+    /// * `path` - The path where the exported events should be saved.
+    /// 
+    /// # Returns
+    /// 
+    /// * `Result<(), ActorError>` - Ok if the export was successful, or an error if there was a 
+    ///   problem during the export.
+    /// 
+    async fn export<P: AsRef<Path>>(&mut self, path: P) -> Result<(), ActorError> {
+        let path = path.as_ref().join(format!("{}.export", self.store.prefix()));
+        let file = File::create(&path).await
+            .map_err(|e| ActorError::Store(format!("Failed to create export file {} from path {:?}: {}", path.display(), path, e)))?;
+        let encoder = GzipEncoder::new(file);
+        let mut writer = BufWriter::new(encoder);
+        
+        for seq in 0..self.next_sequence {
+            let data = self.get(seq)?;
+            Self::write_data(&mut writer, &data).await
+                .map_err(|e| ActorError::Store(format!("Failed to write event data: {}", e)))?;
+        }
+        writer.flush().await
+            .map_err(|e| ActorError::Store(format!("Failed to flush export writer: {}", e)))?;
+        writer.shutdown().await
+            .map_err(|e| ActorError::Store(format!("Failed to shutdown export writer: {}", e)))?;
+        Ok(())
+    }
+
+    /// Imports events from a previously exported file into the journal.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The path where the exported events are located.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<(), ActorError>` - Ok if the import was successful, or an error if there was a 
+    ///   problem during the import.
+    async fn import<P: AsRef<Path>>(&mut self, path: P) -> Result<(), ActorError> {
+        // Purge existing events before importing new ones.
+        self.store.purge()
+            .map_err(|e| ActorError::Store(format!("Purge store error: {}", e)))?;
+        self.next_sequence = 0;
+        
+        // Construct the full path to the export file.
+        let path = path.as_ref().join(format!("{}.export", self.store.prefix()));
+        let file = File::open(&path).await
+            .map_err(|e| ActorError::Store(format!("Failed to open import file {} from path {:?}: {}", path.display(), path, e)))?;
+        
+        // Wrap the file in a buffered reader and a gzip decoder for reading the exported data.
+        let file_reader = BufReader::new(file);
+        let decoder = GzipDecoder::new(file_reader);
+        let mut reader = BufReader::new(decoder);
+
+        // Read and import each event from the exported file.
+        while let Ok(data) = Self::read_data(&mut reader).await {
+            self.put(&data)?;
+        }
+        Ok(())
+    }
+
+    /// Writes the given data to the provided writer, prefixed with its size as a 32-bit unsigned 
+    /// integer.
+    /// 
+    /// # Arguments
+    ///
+    /// * `writer` - The writer to which the data will be written.
+    /// * `data` - The data to be written.
+    ///
+    /// # Returns
+    ///
+    /// * `io::Result<()>` - Ok if the write was successful, or an error if there was a problem 
+    ///   during the write.
+    async fn write_data<W> (writer: &mut W, data: &[u8]) -> io::Result<()>
+    where
+        W: AsyncWriteExt + Unpin,
+    {
+        let size = data.len() as u32;
+        writer.write_u32(size).await?;
+        writer.write_all(data).await?;
+        Ok(())
+    }
+
+    /// Reads data from the provided reader, expecting the data to be prefixed with its size as a 
+    /// 32-bit unsigned integer.
+    ///
+    /// # Arguments
+    ///
+    /// * `reader` - The reader from which the data will be read.
+    ///
+    /// # Returns
+    ///
+    /// * `io::Result<Vec<u8>>` - Ok containing the read data if successful, or an error if there 
+    ///   was a problem during the read.
+    async fn read_data<R>(reader: &mut R) -> io::Result<Vec<u8>>
+    where
+        R: AsyncReadExt + Unpin,
+    {
+        let size = reader.read_u32().await?;
+        let mut data = vec![0; size as usize];
+        reader.read_exact(&mut data).await?;
+        Ok(data)
+    }
 }
 
 /// Messages that can be sent to the journal actor to perform various operations such as putting
@@ -226,8 +319,10 @@ pub enum JournalMessage {
     Range(u64, Option<u64>),
     /// Message to flush the journal's store, ensuring that all pending writes are persisted.
     Flush,
-    /// Message to remove an event from the journal by its sequence number.
-    Remove(u64),
+     /// Message to import events from an external source, such as a file.
+    Import(String),
+    /// Message to export events to an external destination, such as a file.
+    Export(String),
 }
     
 impl Message for JournalMessage {}
@@ -276,7 +371,7 @@ impl<S: Store> Actor for BaseJournal<S> {
         match msg {
             JournalMessage::Put(event) => {
                 match self.put(&event) {
-                    Ok(_) => Ok(JournalResponse::LastSequence(self.latest_sequence)),
+                    Ok(_) => Ok(JournalResponse::LastSequence(self.next_sequence - 1)),
                     Err(e) => Err(ActorError::Store(
                         format!("Failed to put event in journal: {}", e)
                     )),
@@ -304,10 +399,6 @@ impl<S: Store> Actor for BaseJournal<S> {
                     None => Ok(JournalResponse::NotFound),
                 }
             },
-            JournalMessage::Remove(sequence) => {
-                let event = self.remove(sequence)?;
-                Ok(JournalResponse::Event(event))
-            }
             JournalMessage::LastSequence => {
                 let seq = self.latest_sequence();
                 Ok(JournalResponse::LastSequence(seq))
@@ -323,6 +414,20 @@ impl<S: Store> Actor for BaseJournal<S> {
                         format!("Failed to flush journal: {}", e)
                     )),
                 }
+            },
+            JournalMessage::Import(path) => {
+                match self.import(&path).await {
+                    Ok(_) => Ok(JournalResponse::None),
+                    Err(e) => Err(e),
+                }
+                // Ok(JournalResponse::None)
+            },
+            JournalMessage::Export(path) => {
+                match self.export(&path).await   {
+                    Ok(_) => Ok(JournalResponse::None),
+                    Err(e) => Err(e),
+                }
+                // Ok(JournalResponse::None)
             },
         }
     }
@@ -340,12 +445,14 @@ mod tests {
     async fn test_journal() {
         let token = CancellationToken::new();
         let mut system = System::new(Config::default(), token);
-        let manager = StoreManager::default();
+        let path = tempfile::tempdir().unwrap();
+        let path = path.path().to_str().unwrap().to_string();
+        let manager = StoreManager::new(&path).unwrap();
         system.add_helper("storage", manager.clone()).await;
         let store = manager.create_store("test_journal", "event").unwrap();
         let journal = Journal::new(store);
         let journal = system.create_actor(journal, "journal").await.unwrap();
-        for i in 1..=5 {
+        for i in 0..=5 {
             let event = format!("test event {}", i).into_bytes();
             let response = journal.ask(JournalMessage::Put(event)).await.unwrap();
             match response {
@@ -381,16 +488,6 @@ mod tests {
             _ => panic!("Expected JournalResponse::Events"),
         }
 
-        // Test removing an event from the journal
-        let response = journal.ask(JournalMessage::Remove(3)).await.unwrap();
-        match response {
-            JournalResponse::Event(data) => {
-                let expected_event = format!("test event {}", 3).into_bytes();
-                assert_eq!(data, expected_event);
-            },
-            _ => panic!("Expected JournalResponse::Event"),
-        }
-
         // Test inserting an event at a specific sequence number
         let event = format!("new test event {}", 3).into_bytes();
         let response = journal.ask(JournalMessage::Insert(3, event.clone())).await.unwrap();
@@ -403,6 +500,20 @@ mod tests {
         match response {
             JournalResponse::Event(data) => assert_eq!(data, event),
             _ => panic!("Expected JournalResponse::Event"),
+        }
+
+        // Export the journal to a temporary directory
+        let response = journal.ask(JournalMessage::Export(path.to_string())).await.unwrap();
+        match response {
+            JournalResponse::None => {},
+            _ => panic!("Expected JournalResponse::None"),
+        }
+
+        // Import the journal from the temporary directory
+        let response = journal.ask(JournalMessage::Import(path.to_string())).await.unwrap();
+        match response {
+            JournalResponse::None => {},
+            _ => panic!("Expected JournalResponse::None"),
         }
 
         // Test flushing the journal

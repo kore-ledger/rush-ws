@@ -15,7 +15,11 @@ use super::{DbManager, Store, IteratorOptions};
 use crate::Error;
 
 use fjall::{Database, KeyspaceCreateOptions, Guard};
-use std::path::PathBuf;
+use std::{
+    iter::DoubleEndedIterator,
+    path::PathBuf, 
+    u64::MAX,
+};
 
 /// A database manager that creates Fjall stores. It's intended for production use and provides a 
 /// persistent storage solution.
@@ -69,6 +73,21 @@ pub struct FjallStore {
 
 impl FjallStore {
 
+    /// Converts a Fjall `Guard` into a key-value pair, where the key is parsed as a u64 and the
+    /// value is returned as a byte vector.
+    ///
+    /// # Arguments
+    ///
+    /// - `guard`: The Fjall `Guard` containing the key-value pair.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the key cannot be parsed as a u64.
+    ///
+    /// # Returns
+    ///
+    /// - `Result<(u64, Vec<u8>), Error>`: The parsed key and value, or an error if parsing fails.
+    /// 
     pub fn into_key_value(guard: Guard) -> Result<(u64, Vec<u8>), Error> {
         let (key, value) = guard.into_inner()?;
         let key_str = String::from_utf8_lossy(&key);
@@ -103,7 +122,13 @@ impl FjallStore {
     /// Returns an iterator over all key-value pairs in the store that match the prefix. The keys 
     /// are parsed as u64 values, and the values are returned as byte vectors. If there is an 
     /// error in parsing a key, that entry is skipped.
-    pub fn prefix_iterator<'a>(&'a self) -> impl Iterator<Item = (u64, Vec<u8>)> + 'a {
+    /// 
+    /// # Returns
+    /// 
+    /// - `Iterator<Item = (u64, Vec<u8>)>`: An iterator over the key-value pairs that match the 
+    ///   prefix.
+    /// 
+    pub fn prefix_iterator<'a>(&'a self) -> impl DoubleEndedIterator<Item = (u64, Vec<u8>)> + 'a {
         self.keyspace.prefix(&self.prefix).filter_map(|guard| {
             Self::into_key_value(guard).ok()
         })
@@ -113,6 +138,10 @@ impl FjallStore {
 impl Store for FjallStore {
     fn name(&self) -> &str {
         self.name.as_str()
+    }
+    
+    fn prefix(&self) -> &str {
+        self.prefix.as_str()
     }
 
     fn get(&self, key: u64) -> Result<Vec<u8>, Error> {
@@ -163,15 +192,15 @@ impl Store for FjallStore {
         &'a self,
         options: IteratorOptions,
     ) -> Box<dyn Iterator<Item = (u64, Vec<u8>)> + 'a> {
-        let vec = self.prefix_iterator().collect::<Vec<_>>();
-        let size = vec.len() as u64;
+        let iter = self.prefix_iterator();
+        //let size = i
         match options {
             IteratorOptions::Forward { from, count } => {
                 // Implement forward iteration logic here
                 let from = from.unwrap_or(0);
-                let count = count.unwrap_or(size);
+                let count = count.unwrap_or(MAX);
                 Box::new(
-                    vec.into_iter().filter_map(move |(key, value)| {
+                    iter.filter_map(move |(key, value)| {
                         if key < from {
                             return None;
                         }
@@ -183,9 +212,9 @@ impl Store for FjallStore {
             IteratorOptions::Reverse { from, count } => {
                 // Implement reverse iteration logic here
                 let from = from.unwrap_or(self.last_key());
-                let count = count.unwrap_or(size);
+                let count = count.unwrap_or(MAX);
                 Box::new(
-                    vec.into_iter().rev().filter_map(move |(key, value)| {
+                    iter.rev().filter_map(move |(key, value)| {
                         if key > from {
                             return None;
                         }
@@ -198,7 +227,7 @@ impl Store for FjallStore {
                 // Implement range iteration logic here
                 let to = to.unwrap_or(self.last_key());
                 Box::new(
-                    vec.into_iter().filter_map(move |(key, value)| {
+                    iter.filter_map(move |(key, value)| {
                         if key >= from && key <= to {
                             Some((key, value))
                         } else {

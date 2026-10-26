@@ -6,12 +6,14 @@ rust-version.workspace = true
 
 [dependencies]
 actor = { path = "../actor" }
+async-compression = { version = "0.4", features = ["tokio", "gzip"] }
 async-trait = { workspace = true }
 fjall = { version= "3.1.0", optional = true }
 rmp-serde = "1.3.1"
 serde = { workspace = true, default-features = false, features = ["derive"] }
 #serde_bare = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util"] }
 tracing = { workspace = true }
 
 [dev-dependencies]

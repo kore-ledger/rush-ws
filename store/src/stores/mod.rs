@@ -99,6 +99,14 @@ pub trait Store: Sync + Send + 'static {
     ///
     fn name(&self) -> &str;
 
+    /// Retrieve the prefix used for filtering/namespacing values within the store.
+    ///
+    /// # Returns
+    ///
+    /// The prefix of the store.
+    ///
+    fn prefix(&self) -> &str;
+
     /// Retrieves the value associated with the given key.
     ///
     /// # Arguments
