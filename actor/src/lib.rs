@@ -20,8 +20,8 @@ mod runner;
 mod supervision;
 mod system;
 
-pub use actor::{Actor, ActorContext, ActorRef, Event, Message, Response, DummyEvent};
-pub use error::Error;
+pub use actor::{Actor, ActorContext, ActorRef, DummyEvent, Event, Message, Response};
+pub use error::{Error, ResultExt};
+pub use event::EventHandler;
 pub use path::ActorPath;
 pub use system::{Config, System};
-pub use event::EventHandler;

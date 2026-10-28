@@ -7,11 +7,11 @@ use tokio::sync::broadcast::{Receiver as EventReceiver, error::RecvError};
 
 use tracing::debug;
 
-/// 
+///
 pub struct EventManager<E: Event> {
     /// The event handler that will be called for each received event.
     handler: Box<dyn EventHandler<E>>,
-    /// Receiver for incoming events. The EventManager will listen to this receiver and 
+    /// Receiver for incoming events. The EventManager will listen to this receiver and
     /// invoke the handler for each received event.
     receiver: EventReceiver<E>,
 }
@@ -25,8 +25,10 @@ impl<E: Event> EventManager<E> {
     /// * `receiver` - The broadcast receiver to listen for events.
     ///
     pub fn new(handler: impl EventHandler<E>, receiver: EventReceiver<E>) -> Self {
-
-        Self { handler: Box::new(handler), receiver }
+        Self {
+            handler: Box::new(handler),
+            receiver,
+        }
     }
 
     /// Starts the event loop, listening for incoming events and invoking the handler.

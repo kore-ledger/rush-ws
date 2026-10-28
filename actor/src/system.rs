@@ -4,13 +4,13 @@
 //! managing actors, supervision and lifecycle signals.
 
 use crate::{
-    Actor, ActorPath, ActorRef, Event, Error,
+    Actor, ActorPath, ActorRef, Error, Event, ResultExt,
+    event::{EventHandler, EventManager},
     runner::ActorRunner,
-    event::{EventManager, EventHandler}
 };
-use tokio::sync::{RwLock, mpsc, oneshot, broadcast::Receiver as EventReceiver};
-use tokio_util::sync::CancellationToken;
 use serde::Deserialize;
+use tokio::sync::{RwLock, broadcast::Receiver as EventReceiver, mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error};
 
 use std::{any::Any, collections::HashMap, sync::Arc};
@@ -156,11 +156,11 @@ impl System {
     }
 
     /// Stops a specific root actor by name.
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `name` - The name of the root actor to stop.
-    /// 
+    ///
     /// # Returns
     ///
     /// * `Result<(), Error>` - Ok if the root actor was stopped successfully, error otherwise.
@@ -171,24 +171,24 @@ impl System {
     }
 
     /// Returns trus if the system has childs.
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// * true - if the system has childs.
-    /// 
+    ///
     pub async fn has_childs(&self) -> bool {
         self.system_supervisor.has_childs(&self.root_path).await
     }
 
-    /// Remove child 
-    /// 
-    /// # Arguments 
-    /// 
+    /// Remove child
+    ///
+    /// # Arguments
+    ///
     /// * path - Child path.
-    /// 
+    ///
     pub async fn remove_child(&mut self, path: &ActorPath) {
         self.system_supervisor.remove_child(path).await
-    }   
+    }
 
     /// Handles a child actor error signal.
     ///     
@@ -212,7 +212,9 @@ impl System {
     ///
     pub async fn on_child_fault(&mut self, path: &ActorPath, error: &Error) -> Result<(), Error> {
         error!("System received ChildFault from {:?}: {:?}", path, error);
-        self.system_supervisor.stop_children(&self.root_path).await?;
+        self.system_supervisor
+            .stop_children(&self.root_path)
+            .await?;
         Ok(())
     }
 
@@ -260,7 +262,7 @@ impl System {
     }
 
     /// Adds an event handler to the system to process events emitted by actors.
-    /// 
+    ///
     /// # Arguments
     ///
     /// * `handler` - The event handler to process events.
@@ -270,8 +272,7 @@ impl System {
         &self,
         handler: impl EventHandler<E>,
         receiver: EventReceiver<E>,
-    ) 
-    where
+    ) where
         E: Event,
     {
         let mut event_manager = EventManager::new(handler, receiver);
@@ -279,7 +280,6 @@ impl System {
             event_manager.start().await;
         });
     }
-    
 }
 
 /// Runner for the actor system to handle signals and lifecycle events.
@@ -305,9 +305,9 @@ impl SystemRunner {
     }
 
     /// Runs the system runner, listening for signals and handling lifecycle events.
-    /// This method will run indefinitely until the cancellation token is triggered or the 
+    /// This method will run indefinitely until the cancellation token is triggered or the
     /// signal channel is closed.
-    /// 
+    ///
     pub fn run(self) {
         debug!("SystemRunner started.");
         let mut receiver = self.signal_receiver;
@@ -330,7 +330,7 @@ impl SystemRunner {
                                 }
                             },
                             Err(e) => error!("Error stopping child actors during shutdown: {:?}", e),
-                        }                        
+                        }
                     }
                     Some(signal) = receiver.recv() => {
                         debug!("SystemRunner received signal.");
@@ -396,8 +396,9 @@ impl SupervicionHandler {
     ///
     pub fn new(
         registry: ActorRegistry,
-        helpers: HelpersRegistry, 
-        child_signal_sender: SignalSender) -> Self {
+        helpers: HelpersRegistry,
+        child_signal_sender: SignalSender,
+    ) -> Self {
         Self {
             action_senders: Arc::new(RwLock::new(HashMap::new())),
             child_signal_sender,
@@ -469,7 +470,9 @@ impl SupervicionHandler {
         }
 
         // Insert the child into supervision
-        self.action_senders.write().await
+        self.action_senders
+            .write()
+            .await
             .insert(path.clone(), action_sender);
         debug!("Actor '{}' created successfully.", path);
         Ok(actor_ref)
@@ -523,7 +526,12 @@ impl SupervicionHandler {
     /// * `Vec<ActorPath>` - A vector of child actor paths.
     ///
     pub async fn get_childs(&self, parent: &ActorPath) -> Vec<ActorPath> {
-        self.registry.read().await.keys().into_iter().cloned()
+        self.registry
+            .read()
+            .await
+            .keys()
+            .into_iter()
+            .cloned()
             .filter(|path| &path.parent() == parent)
             .collect()
     }
@@ -534,8 +542,8 @@ impl SupervicionHandler {
     ///
     /// * `Result<(), Error>` - Ok if all children stopped successfully, error otherwise.
     ///
-    pub async fn stop_children(&mut self, parent: &ActorPath) -> Result<bool, Error> { 
-        debug!("Stopping children."); 
+    pub async fn stop_children(&mut self, parent: &ActorPath) -> Result<bool, Error> {
+        debug!("Stopping children.");
         let childs = self.get_childs(parent).await;
         if childs.is_empty() {
             debug!("No child actors to stop.");
@@ -549,28 +557,25 @@ impl SupervicionHandler {
     }
 
     /// Stops a specific child actor by path.
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `path` - The path of the child actor to stop.
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// * `Result<(), Error>` - Ok if the child was stopped successfully, error otherwise.
-    /// 
+    ///
     pub async fn stop_child(&mut self, path: &ActorPath) -> Result<(), Error> {
         // Remove from registry
         self.registry.write().await.remove(path);
         let mut action_senders = self.action_senders.write().await;
         if let Some(action_sender) = action_senders.get(path) {
             debug!("Sending stop action to child '{}'.", path);
-            if let Err(e) = action_sender.send(ChildAction::Stop).await {
-                error!("Failed to send stop action to child '{}': {:?}", path, e);
-                return Err(Error::Supervision(format!(
-                    "Failed to send stop action to child '{}': {:?}",
-                    path, e
-                )));
-            }
+            action_sender
+                .send(ChildAction::Stop)
+                .await
+                .actor_supervision("Failed to send stop action to child")?;
             // Remove the action sender from the registry after sending the stop signal.
             action_senders.remove(path);
         } else {
@@ -590,25 +595,21 @@ impl SupervicionHandler {
     ///
     pub async fn restart_children(&self) -> Result<(), Error> {
         let action_senders = self.action_senders.write().await;
-        for (path, action_sender) in action_senders.iter() {
-            if let Err(e) = action_sender.send(ChildAction::Restart).await {
-                error!("Failed to send restart action to child '{}': {:?}", path, e);
-                return Err(Error::Supervision(format!(
-                    "Failed to send restart action to child '{}': {:?}",
-                    path, e
-                )));
-            }
+        for (_path, action_sender) in action_senders.iter() {
+            action_sender
+                .send(ChildAction::Restart)
+                .await
+                .actor_supervision("Failed to send restart action to child")?;
         }
         Ok(())
     }
 
-
     /// Removes a child actor from the supervision registry.
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `path` - The path of the child actor to remove.
-    /// 
+    ///
     pub async fn remove_child(&mut self, path: &ActorPath) {
         self.registry.write().await.remove(path);
         self.action_senders.write().await.remove(path);
@@ -665,7 +666,6 @@ impl SupervicionHandler {
             .and_then(|any| any.downcast_ref::<H>())
             .cloned()
     }
-
 }
 
 /// Default implementation for Supervisor with an empty registry and a dummy signal sender.
@@ -710,7 +710,10 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::{Actor, ActorContext, Error, Event, supervision::{FixedIntervalStrategy, Strategy, SupervisionStrategy}};
+    use crate::{
+        Actor, ActorContext, Error, Event,
+        supervision::{FixedIntervalStrategy, Strategy, SupervisionStrategy},
+    };
     use tracing_test::traced_test;
 
     struct TestActor;
@@ -784,19 +787,19 @@ mod tests {
             debug!("TestHandler received event: {}", event);
             assert_eq!(event, "event1".to_owned());
         }
-    }   
+    }
 
     #[tokio::test]
     #[traced_test]
     async fn test_event_handler() {
-                let token = CancellationToken::new();
+        let token = CancellationToken::new();
         let mut system = System::new(Config::default(), token.clone());
         // Create an actor.
         let actor_ref = system.create_actor(TestActor, "test_actor").await.unwrap();
         system
             .add_event_handler(TestHandler, actor_ref.subscribe())
             .await;
-        
+
         // Send a message that triggers an event
         let response = actor_ref.ask("event1".to_owned()).await.unwrap();
         assert_eq!(response, "Received: event1");
@@ -805,17 +808,14 @@ mod tests {
 
         // Clean up
         token.cancel();
-    
-    }  
+    }
 
     #[tokio::test]
     #[traced_test]
     async fn test_system() {
         let token = CancellationToken::new();
         let mut system = System::new(Config::default(), token.clone());
-        assert!(logs_contain(
-            "SystemRunner started."
-        ));
+        assert!(logs_contain("SystemRunner started."));
         assert!(logs_contain("Actor system created with root path: /user"));
 
         // Create an actor.
@@ -1019,7 +1019,6 @@ mod tests {
 
         // Get childs path
 
-
         // Retrieve the child actor reference .
         let child_ref = system
             .get_actor::<TestChild>("/parent/child")
@@ -1062,7 +1061,6 @@ mod tests {
         ));
         assert!(logs_contain("System received ChildFault"));
 
-
         // Stop the system.
         token.cancel();
 
@@ -1084,7 +1082,6 @@ mod tests {
         let actor_2 = system.create_actor(TestActor, "test2").await.unwrap();
         let mut receiver_2 = actor_2.subscribe();
 
-
         // Send a message to trigger event in actor 1.
         let result = actor_1.ask("event1".to_string()).await;
         assert!(result.is_ok());
@@ -1095,7 +1092,9 @@ mod tests {
 
         let mut events = 0;
         loop {
-            if events == 2 {break;}
+            if events == 2 {
+                break;
+            }
             tokio::select! {
                 Ok(event) = receiver_1.recv() => {
                     assert_eq!(event, "event1".to_owned());
@@ -1106,36 +1105,39 @@ mod tests {
                     events += 1;
                 }
             }
-
         }
 
         // Stop system
         token.cancel();
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Wait for shutdown logs
-
     }
 
     #[tokio::test]
-    #[traced_test] 
-    #[serial_test::serial] 
-    async fn test_fail_supervision(){
-        let token = CancellationToken::new(); 
-        let mut system = System::new(Config::default(), token.clone()); 
-        let _ = system.create_actor(TestActor, "parent").await.unwrap(); 
+    #[traced_test]
+    #[serial_test::serial]
+    async fn test_fail_supervision() {
+        let token = CancellationToken::new();
+        let mut system = System::new(Config::default(), token.clone());
+        let _ = system.create_actor(TestActor, "parent").await.unwrap();
         assert!(system.actor_exists("parent").await.unwrap()); // Retrieve the child actor reference . 
-        
-        let child_ref = system .get_actor::<TestChild>("/parent/child") .await .unwrap(); 
-        assert!(child_ref.is_some()); 
+
+        let child_ref = system
+            .get_actor::<TestChild>("/parent/child")
+            .await
+            .unwrap();
+        assert!(child_ref.is_some());
         let child_ref = child_ref.unwrap();
 
-        // Send a message that causes the child to emit an error. 
-        let _ = child_ref.ask("fail".to_string()).await; 
-        assert!(logs_contain( "Actor /user/parent received child fault from /user/parent/child" )); 
-        assert!(logs_contain("System received ChildFault")); 
+        // Send a message that causes the child to emit an error.
+        let _ = child_ref.ask("fail".to_string()).await;
+        assert!(logs_contain(
+            "Actor /user/parent received child fault from /user/parent/child"
+        ));
+        assert!(logs_contain("System received ChildFault"));
         assert!(logs_contain("Stopping child actor '/user/parent/child'"));
-        
-        // Stop the system. 
-        token.cancel(); 
+
+        // Stop the system.
+        token.cancel();
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Wait for shutdown logs
     }
 
@@ -1164,8 +1166,16 @@ mod tests {
             Ok(())
         }
 
-        async fn on_child_error(&mut self, path: &ActorPath, error: &Error, ctx: &mut ActorContext<Self>) {
-            debug!("TestRestartParent received child error from {:?}: {:?}", path, error);
+        async fn on_child_error(
+            &mut self,
+            path: &ActorPath,
+            error: &Error,
+            ctx: &mut ActorContext<Self>,
+        ) {
+            debug!(
+                "TestRestartParent received child error from {:?}: {:?}",
+                path, error
+            );
             let name = path.key();
             if ctx.child_exists(&name).await.unwrap() {
                 ctx.restart_children().await.unwrap();
@@ -1196,13 +1206,11 @@ mod tests {
         }
 
         fn supervision_strategy() -> SupervisionStrategy {
-            SupervisionStrategy::Retry(
-                Strategy::FixedInterval(FixedIntervalStrategy::new(
-                    3, 
-                    Duration::from_millis(100)
-                ))
-            )
-        }        
+            SupervisionStrategy::Retry(Strategy::FixedInterval(FixedIntervalStrategy::new(
+                3,
+                Duration::from_millis(100),
+            )))
+        }
     }
 
     #[tokio::test]
@@ -1211,7 +1219,10 @@ mod tests {
     async fn test_child_restart() {
         let token = CancellationToken::new();
         let mut system = System::new(Config::default(), token.clone());
-        let parent_ref = system.create_actor(TestRestartParent, "parent").await.unwrap();  
+        let parent_ref = system
+            .create_actor(TestRestartParent, "parent")
+            .await
+            .unwrap();
 
         // Retrieve the child actor reference .
         let child_ref = system
@@ -1220,12 +1231,14 @@ mod tests {
             .unwrap();
         assert!(child_ref.is_some());
         let child_ref = child_ref.unwrap();
-        // Send a message that causes the child to emit an error.  
+        // Send a message that causes the child to emit an error.
         let _ = child_ref.ask("fail".to_string()).await;
         assert!(logs_contain(
             "TestRestartParent received child error from /user/parent/child"
         ));
-        assert!(logs_contain("Actor /user/parent/child received restart action."));
+        assert!(logs_contain(
+            "Actor /user/parent/child received restart action."
+        ));
         assert!(logs_contain("Actor /user/parent/child restarted."));
         assert!(logs_contain("Prestarting actor /user/parent/child"));
         assert!(logs_contain("Actor /user/parent/child started."));
@@ -1234,12 +1247,10 @@ mod tests {
         // Check child in parent
         let result = parent_ref.tell("Hello Child".to_owned()).await;
         assert!(result.is_ok());
-         
+
         // Stop the system
         token.cancel();
 
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Wait for shutdown logs
-
     }
-
 }

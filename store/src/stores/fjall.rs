@@ -2,26 +2,22 @@
 
 //! This module provides an implementation of the `Store` trait using the Fjall database.
 //! It is only compiled if the `fjall` feature is enabled.
-//! 
-//! The `FjallDbManager` struct is responsible for creating instances of `FjallStore`, which is 
+//!
+//! The `FjallDbManager` struct is responsible for creating instances of `FjallStore`, which is
 //! the actual store implementation that interacts with the Fjall database.
-//! 
-//! The `FjallStore` struct implements the `Store` trait and provides methods for storing and 
-//! retrieving data from the Fjall database. It uses a prefix-based key-value storage approach, 
+//!
+//! The `FjallStore` struct implements the `Store` trait and provides methods for storing and
+//! retrieving data from the Fjall database. It uses a prefix-based key-value storage approach,
 //! where keys are prefixed with a string to allow for efficient retrieval of related data.
-//! 
+//!
 
-use super::{DbManager, Store, IteratorOptions};
+use super::{DbManager, IteratorOptions, Store};
 use crate::Error;
 
-use fjall::{Database, KeyspaceCreateOptions, Guard};
-use std::{
-    iter::DoubleEndedIterator,
-    path::PathBuf, 
-    u64::MAX,
-};
+use fjall::{Database, Guard, KeyspaceCreateOptions};
+use std::{iter::DoubleEndedIterator, path::PathBuf, u64::MAX};
 
-/// A database manager that creates Fjall stores. It's intended for production use and provides a 
+/// A database manager that creates Fjall stores. It's intended for production use and provides a
 /// persistent storage solution.
 #[derive(Clone)]
 pub struct FjallDbManager {
@@ -30,17 +26,16 @@ pub struct FjallDbManager {
 }
 
 impl FjallDbManager {
-
     /// Creates a new `FjallDbManager` with the specified database path.
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// - `path`: The file system path to the Fjall database.
     ///
     /// # Errors
     ///
     /// Returns an error if the database could not be opened.
-    /// 
+    ///
     pub fn new(path: &str) -> Result<Self, Error> {
         let path = PathBuf::from(&path);
         let db = Database::builder(&path).open()?;
@@ -49,16 +44,19 @@ impl FjallDbManager {
 }
 
 impl DbManager<FjallStore> for FjallDbManager {
-
     fn create_store(&self, name: &str, prefix: &str) -> Result<FjallStore, Error> {
-        let keyspace = self.db.keyspace(name, || {
-            KeyspaceCreateOptions::default()
-        })?;
-        Ok(FjallStore { name: name.to_owned(), keyspace, prefix: prefix.to_owned() })
+        let keyspace = self
+            .db
+            .keyspace(name, || KeyspaceCreateOptions::default())?;
+        Ok(FjallStore {
+            name: name.to_owned(),
+            keyspace,
+            prefix: prefix.to_owned(),
+        })
     }
 
     fn drop(self) -> Result<(), Error> {
-       Ok(std::fs::remove_dir_all(&self.path)?)
+        Ok(std::fs::remove_dir_all(&self.path)?)
     }
 }
 
@@ -72,7 +70,6 @@ pub struct FjallStore {
 }
 
 impl FjallStore {
-
     /// Converts a Fjall `Guard` into a key-value pair, where the key is parsed as a u64 and the
     /// value is returned as a byte vector.
     ///
@@ -87,51 +84,51 @@ impl FjallStore {
     /// # Returns
     ///
     /// - `Result<(u64, Vec<u8>), Error>`: The parsed key and value, or an error if parsing fails.
-    /// 
+    ///
     pub fn into_key_value(guard: Guard) -> Result<(u64, Vec<u8>), Error> {
         let (key, value) = guard.into_inner()?;
         let key_str = String::from_utf8_lossy(&key);
-        let key_num = key_str.split(':').next_back()
+        let key_num = key_str
+            .split(':')
+            .next_back()
             .and_then(|s| s.parse::<u64>().ok())
-            .ok_or_else(|| Error::Reading(
-                format!("failed to parse key from fjall -> {}", key_str)
-            ))?;
+            .ok_or_else(|| {
+                Error::Reading(format!("failed to parse key from fjall -> {}", key_str))
+            })?;
         Ok((key_num, value.to_vec()))
     }
 
-    /// Returns the last key in the store that matches the prefix. The keys are parsed as u64 
+    /// Returns the last key in the store that matches the prefix. The keys are parsed as u64
     /// values. If there is an error in parsing a key, it is skipped. If there are no keys that
     /// match the prefix, it returns 0.
-    /// 
-    /// This method is useful for determining the highest key currently stored in the Fjall 
+    ///
+    /// This method is useful for determining the highest key currently stored in the Fjall
     /// database for the given prefix.
-    /// 
+    ///
     /// # Returns
-    /// 
-    /// - `u64`: The last key in the store that matches the prefix, or 0 if there are no matching 
+    ///
+    /// - `u64`: The last key in the store that matches the prefix, or 0 if there are no matching
     ///   keys.
     pub fn last_key(&self) -> u64 {
         let iter = self.keyspace.prefix(&self.prefix);
         iter.last()
-            .and_then(|guard| {
-                Self::into_key_value(guard).ok().map(|(key, _)| key)
-            })
+            .and_then(|guard| Self::into_key_value(guard).ok().map(|(key, _)| key))
             .unwrap_or(0)
     }
 
-    /// Returns an iterator over all key-value pairs in the store that match the prefix. The keys 
-    /// are parsed as u64 values, and the values are returned as byte vectors. If there is an 
+    /// Returns an iterator over all key-value pairs in the store that match the prefix. The keys
+    /// are parsed as u64 values, and the values are returned as byte vectors. If there is an
     /// error in parsing a key, that entry is skipped.
-    /// 
+    ///
     /// # Returns
-    /// 
-    /// - `Iterator<Item = (u64, Vec<u8>)>`: An iterator over the key-value pairs that match the 
+    ///
+    /// - `Iterator<Item = (u64, Vec<u8>)>`: An iterator over the key-value pairs that match the
     ///   prefix.
-    /// 
+    ///
     pub fn prefix_iterator<'a>(&'a self) -> impl DoubleEndedIterator<Item = (u64, Vec<u8>)> + 'a {
-        self.keyspace.prefix(&self.prefix).filter_map(|guard| {
-            Self::into_key_value(guard).ok()
-        })
+        self.keyspace
+            .prefix(&self.prefix)
+            .filter_map(|guard| Self::into_key_value(guard).ok())
     }
 }
 
@@ -139,7 +136,7 @@ impl Store for FjallStore {
     fn name(&self) -> &str {
         self.name.as_str()
     }
-    
+
     fn prefix(&self) -> &str {
         self.prefix.as_str()
     }
@@ -167,22 +164,18 @@ impl Store for FjallStore {
     fn last(&self) -> Option<(u64, Vec<u8>)> {
         let iter = self.keyspace.prefix(&self.prefix);
         match iter.last() {
-            Some(guard) => {
-                match Self::into_key_value(guard) {
-                    Ok((key, value)) => Some((key, value)),
-                    Err(_) => None,
-                }
+            Some(guard) => match Self::into_key_value(guard) {
+                Ok((key, value)) => Some((key, value)),
+                Err(_) => None,
             },
-            _ => {
-                None
-            },
+            _ => None,
         }
     }
 
     fn purge(&mut self) -> Result<(), Error> {
         let iter = self.keyspace.prefix(&self.prefix);
         for guard in iter {
-            let key = guard.key()?;           
+            let key = guard.key()?;
             self.keyspace.remove(key)?;
         }
         Ok(())
@@ -206,39 +199,37 @@ impl Store for FjallStore {
                         }
                         Some((key, value))
                     })
-                    .take(count as usize)
+                    .take(count as usize),
                 )
-            },
+            }
             IteratorOptions::Reverse { from, count } => {
                 // Implement reverse iteration logic here
                 let from = from.unwrap_or(self.last_key());
                 let count = count.unwrap_or(MAX);
                 Box::new(
-                    iter.rev().filter_map(move |(key, value)| {
-                        if key > from {
-                            return None;
-                        }
-                        Some((key, value))
-                    })
-                    .take(count as usize)
+                    iter.rev()
+                        .filter_map(move |(key, value)| {
+                            if key > from {
+                                return None;
+                            }
+                            Some((key, value))
+                        })
+                        .take(count as usize),
                 )
-            },
+            }
             IteratorOptions::Range { from, to } => {
                 // Implement range iteration logic here
                 let to = to.unwrap_or(self.last_key());
-                Box::new(
-                    iter.filter_map(move |(key, value)| {
-                        if key >= from && key <= to {
-                            Some((key, value))
-                        } else {
-                            None
-                        }
-                    })
-                )
-            },
+                Box::new(iter.filter_map(move |(key, value)| {
+                    if key >= from && key <= to {
+                        Some((key, value))
+                    } else {
+                        None
+                    }
+                }))
+            }
         }
     }
-
 }
 
 #[cfg(test)]
@@ -262,14 +253,12 @@ mod tests {
     impl Default for FjallDbManager {
         fn default() -> Self {
             let path = PathBuf::from("./fjall_db");
-    
-            Self::new(path.to_str().unwrap())
-                .expect("Failed to create FjallDbManager")
-       }
-    } 
- 
 
-    test_store_trait!{
+            Self::new(path.to_str().unwrap()).expect("Failed to create FjallDbManager")
+        }
+    }
+
+    test_store_trait! {
         unit_test_fjall_store:crate::stores::fjall::FjallDbManager:crate::stores::fjall::FjallStore
     }
 }

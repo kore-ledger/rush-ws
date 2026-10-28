@@ -1,16 +1,14 @@
 //
-use super::{DbManager, Store, IteratorOptions};
+use super::{DbManager, IteratorOptions, Store};
 
 use crate::Error;
 
-use std::collections::{HashMap, BTreeMap};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, RwLock};
 
-type MemoryData = Arc<
-    RwLock<HashMap<(String, String), Arc<RwLock<BTreeMap<String, Vec<u8>>>>>>,
->;
+type MemoryData = Arc<RwLock<HashMap<(String, String), Arc<RwLock<BTreeMap<String, Vec<u8>>>>>>>;
 
-/// A database manager that creates in-memory stores. It's only intended for testing and 
+/// A database manager that creates in-memory stores. It's only intended for testing and
 /// should not be used in production.
 #[derive(Clone, Default)]
 pub struct MemoryDbManager {
@@ -21,7 +19,9 @@ impl DbManager<MemoryStore> for MemoryDbManager {
     fn create_store(&self, name: &str, prefix: &str) -> Result<MemoryStore, crate::Error> {
         let mut data = self.data.write().unwrap();
         let key = (name.to_string(), prefix.to_string());
-        let store_data = data.entry(key).or_insert_with(|| Arc::new(RwLock::new(BTreeMap::new())));
+        let store_data = data
+            .entry(key)
+            .or_insert_with(|| Arc::new(RwLock::new(BTreeMap::new())));
         Ok(MemoryStore {
             name: name.to_string(),
             prefix: prefix.to_string(),
@@ -40,16 +40,12 @@ pub struct MemoryStore {
 }
 
 impl MemoryStore {
-
-    pub fn iter_prefix(
-        &self,
-        prefix: &str,
-    ) -> Vec<(u64, Vec<u8>)> {
+    pub fn iter_prefix(&self, prefix: &str) -> Vec<(u64, Vec<u8>)> {
         let lock = self.data.read().unwrap();
-        let data: Vec<(String, Vec<u8>)> = lock.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        let data: Vec<(String, Vec<u8>)> =
+            lock.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         drop(lock);
 
-       
         data.into_iter()
             .filter_map(move |(k, v)| {
                 if k.starts_with(prefix) {
@@ -67,7 +63,7 @@ impl Store for MemoryStore {
     fn name(&self) -> &str {
         self.name.as_str()
     }
-    
+
     fn get(&self, key: u64) -> Result<Vec<u8>, crate::Error> {
         let key = format!("{}:{:014}", self.prefix, key);
         let lock = self
@@ -77,12 +73,10 @@ impl Store for MemoryStore {
 
         match lock.get(&key) {
             Some(value) => Ok(value.clone()),
-            None => {
-                Err(Error::EntryNotFound(format!("Key not found: {}", key)))
-            }
-        }       
+            None => Err(Error::EntryNotFound(format!("Key not found: {}", key))),
+        }
     }
-    
+
     fn put(&mut self, key: u64, data: &[u8]) -> Result<(), crate::Error> {
         let key = format!("{}:{:014}", self.prefix, key);
         let mut lock = self
@@ -92,7 +86,7 @@ impl Store for MemoryStore {
         lock.insert(key, data.to_vec());
         Ok(())
     }
-    
+
     fn del(&mut self, key: u64) -> Result<(), crate::Error> {
         let key = format!("{}:{:014}", self.prefix, key);
         let mut lock = self
@@ -102,7 +96,7 @@ impl Store for MemoryStore {
         lock.remove(&key);
         Ok(())
     }
-    
+
     fn last(&self) -> Option<(u64, Vec<u8>)> {
         let lock = self.data.read().ok()?;
         lock.iter().rev().next().map(|(k, v)| {
@@ -110,7 +104,7 @@ impl Store for MemoryStore {
             (key, v.clone())
         })
     }
-    
+
     fn purge(&mut self) -> Result<(), crate::Error> {
         let mut lock = self
             .data
@@ -119,7 +113,7 @@ impl Store for MemoryStore {
         lock.clear();
         Ok(())
     }
-    
+
     fn iter<'a>(
         &'a self,
         options: IteratorOptions,
@@ -134,46 +128,35 @@ impl Store for MemoryStore {
                 let from = from.unwrap_or(0);
                 let count = count.unwrap_or(size);
                 Box::new(
-                    data.into_iter().filter_map(move |(k, v)| {
-                        if k >= from {
-                            Some((k, v))
-                        } else {
-                            None    
-                        }
-                    })
-                    .take(count as usize),
+                    data.into_iter()
+                        .filter_map(move |(k, v)| if k >= from { Some((k, v)) } else { None })
+                        .take(count as usize),
                 )
-            },
+            }
             IteratorOptions::Reverse { from, count } => {
                 let from = from.unwrap_or_else(|| data.last().unwrap().0);
                 let count = count.unwrap_or(size);
                 Box::new(
-                    data.into_iter().rev().filter_map(move |(k, v)| {
-                        if k <= from {
-                            Some((k, v))
-                        } else {
-                            None
-                        }
-                    })
-                    .take(count as usize),
+                    data.into_iter()
+                        .rev()
+                        .filter_map(move |(k, v)| if k <= from { Some((k, v)) } else { None })
+                        .take(count as usize),
                 )
-            },
+            }
             IteratorOptions::Range { from, to } => {
                 let to = to.unwrap_or_else(|| data.last().unwrap().0);
                 if from > to {
                     Box::new(std::iter::empty())
                 } else {
-                    Box::new(
-                        data.into_iter().filter_map(move |(k, v)| {
-                            if k >= from && k <= to {
-                                Some((k, v))
-                            } else {
-                                None
-                            }
-                        }),
-                    )
+                    Box::new(data.into_iter().filter_map(move |(k, v)| {
+                        if k >= from && k <= to {
+                            Some((k, v))
+                        } else {
+                            None
+                        }
+                    }))
                 }
-            },
+            }
         };
         iter
     }
@@ -185,7 +168,7 @@ mod tests {
 
     use crate::test_store_trait;
 
-    test_store_trait!{
-        unit_test_memory_store:crate::stores::memory::MemoryDbManager:crate::stores::memory::MemoryStore      
+    test_store_trait! {
+        unit_test_memory_store:crate::stores::memory::MemoryDbManager:crate::stores::memory::MemoryStore
     }
 }

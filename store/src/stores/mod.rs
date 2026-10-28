@@ -1,14 +1,13 @@
 //
 
-//! This module defines the traits for a key-value store used for event sourcing and state 
-//! snapshots in actors. 
+//! This module defines the traits for a key-value store used for event sourcing and state
+//! snapshots in actors.
 //! The `DbManager` trait provides a factory for creating stores, while the `Store` trait defines
 //! the operations for storing and retrieving key-value pairs.
-//! 
+//!
 
 #[cfg(feature = "memory")]
 pub(crate) mod memory;
-
 
 #[cfg(feature = "fjall")]
 pub(crate) mod fjall;
@@ -35,8 +34,7 @@ pub type StoreManager = FjallDbManager;
 ///
 /// * `S` - The store type that stores key-value pairs (events).
 ///
-pub trait  DbManager<S: Store + 'static>: Sync + Send + Clone
-{
+pub trait DbManager<S: Store + 'static>: Sync + Send + Clone {
     /// Creates a new store for storing key-value pairs (typically events).
     /// Stores are used for event sourcing where multiple events
     /// are stored with unique keys (usually sequence numbers).
@@ -72,17 +70,17 @@ pub trait  DbManager<S: Store + 'static>: Sync + Send + Clone
         Ok(())
     }
 
-    /// Drops the store and performs cleanup. Default implementation does nothing. 
+    /// Drops the store and performs cleanup. Default implementation does nothing.
     /// Override this to implement removing database.
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// Returns Ok(()) if cleanup was successful.
-    /// 
+    ///
     /// # Errors
-    /// 
+    ///
     /// Returns an error if cleanup failed.
-    /// 
+    ///
     fn drop(self) -> Result<(), Error> {
         Ok(())
     }
@@ -197,15 +195,21 @@ pub trait Store: Sync + Send + 'static {
 /// Options for iterating over a store's key-value pairs.
 pub enum IteratorOptions {
     /// Iterate in reverse order.
-    Reverse {from: Option<u64>, count: Option<u64>},
+    Reverse {
+        from: Option<u64>,
+        count: Option<u64>,
+    },
     /// Iterate in forward order.
-    Forward{from: Option<u64>, count: Option<u64>},
+    Forward {
+        from: Option<u64>,
+        count: Option<u64>,
+    },
     /// Iterate over a range of keys.
     Range { from: u64, to: Option<u64> },
 }
 
 /// Macro for test stores
-/// 
+///
 #[cfg(test)]
 #[macro_export]
 macro_rules! test_store_trait {
@@ -218,8 +222,7 @@ macro_rules! test_store_trait {
             #[serial_test::serial]
             fn test_create_store() {
                 let manager = <$type>::default();
-                let store: $type2 =
-                    manager.create_store("test", "test").unwrap();
+                let store: $type2 = manager.create_store("test", "test").unwrap();
                 assert_eq!(Store::name(&store), "test");
                 assert!(manager.stop().is_ok());
                 assert!(manager.drop().is_ok());
@@ -229,20 +232,18 @@ macro_rules! test_store_trait {
             #[serial_test::serial]
             fn test_put_get_store() {
                 let manager = <$type>::default();
-                let mut store: $type2 =
-                    manager.create_store("test", "test").unwrap();
+                let mut store: $type2 = manager.create_store("test", "test").unwrap();
                 Store::put(&mut store, 1, b"value").unwrap();
                 assert_eq!(Store::get(&store, 1).unwrap(), b"value");
                 assert!(manager.stop().is_ok());
                 assert!(manager.drop().is_ok());
             }
-            
+
             #[test]
             #[serial_test::serial]
             fn test_del_store() {
                 let manager = <$type>::default();
-                let mut store: $type2 =
-                    manager.create_store("test", "test").unwrap();
+                let mut store: $type2 = manager.create_store("test", "test").unwrap();
                 Store::put(&mut store, 1, b"value").unwrap();
                 Store::del(&mut store, 1).unwrap();
                 let value = Store::get(&store, 1);
@@ -255,108 +256,84 @@ macro_rules! test_store_trait {
             #[serial_test::serial]
             fn test_iter_reverse() {
                 let manager = <$type>::default();
-                let mut store1: $type2 =
-                    manager.create_store("test", "test1").unwrap();
+                let mut store1: $type2 = manager.create_store("test", "test1").unwrap();
                 Store::put(&mut store1, 1, b"value1").unwrap();
                 Store::put(&mut store1, 2, b"value2").unwrap();
                 Store::put(&mut store1, 3, b"value3").unwrap();
-                let mut store2: $type2 =
-                    manager.create_store("test", "test2").unwrap();
+                let mut store2: $type2 = manager.create_store("test", "test2").unwrap();
                 Store::put(&mut store2, 4, b"value4").unwrap();
                 Store::put(&mut store2, 5, b"value5").unwrap();
                 Store::put(&mut store2, 6, b"value6").unwrap();
-                let mut iter = store1.iter(IteratorOptions::Reverse { from: None, count: None });
-                let mut iter2 = store2.iter(IteratorOptions::Reverse { from: Some(5), count: Some(1) });
-                assert_eq!(
-                    iter.next(),
-                    Some((3, b"value3".to_vec())) 
-                );
-                assert_eq!(
-                    iter.next(),
-                    Some((2, b"value2".to_vec()))
-                );
-                assert_eq!(
-                    iter.next(),
-                    Some((1, b"value1".to_vec()))
-                );
+                let mut iter = store1.iter(IteratorOptions::Reverse {
+                    from: None,
+                    count: None,
+                });
+                let mut iter2 = store2.iter(IteratorOptions::Reverse {
+                    from: Some(5),
+                    count: Some(1),
+                });
+                assert_eq!(iter.next(), Some((3, b"value3".to_vec())));
+                assert_eq!(iter.next(), Some((2, b"value2".to_vec())));
+                assert_eq!(iter.next(), Some((1, b"value1".to_vec())));
                 assert_eq!(iter.next(), None);
-                assert_eq!(
-                    iter2.next(),
-                    Some((5, b"value5".to_vec()))
-                );
+                assert_eq!(iter2.next(), Some((5, b"value5".to_vec())));
                 assert_eq!(iter2.next(), None);
-                let mut iter = store1.iter(IteratorOptions::Reverse { from: Some(2), count: None });
-                let mut iter2 = store2.iter(IteratorOptions::Reverse { from: None, count: Some(1) });
-                assert_eq!(
-                    iter.next(),
-                    Some((2, b"value2".to_vec())) 
-                );
-                assert_eq!(
-                    iter.next(),
-                    Some((1, b"value1".to_vec()))
-                );
+                let mut iter = store1.iter(IteratorOptions::Reverse {
+                    from: Some(2),
+                    count: None,
+                });
+                let mut iter2 = store2.iter(IteratorOptions::Reverse {
+                    from: None,
+                    count: Some(1),
+                });
+                assert_eq!(iter.next(), Some((2, b"value2".to_vec())));
+                assert_eq!(iter.next(), Some((1, b"value1".to_vec())));
                 assert_eq!(iter.next(), None);
-                assert_eq!(
-                    iter2.next(),
-                    Some((6, b"value6".to_vec()))
-                );
+                assert_eq!(iter2.next(), Some((6, b"value6".to_vec())));
                 assert_eq!(iter2.next(), None);
                 assert!(manager.stop().is_ok());
                 assert!(manager.drop().is_ok());
             }
- 
+
             #[test]
             #[serial_test::serial]
             fn test_iter_forward() {
                 let manager = <$type>::default();
-                let mut store1: $type2 =
-                    manager.create_store("test", "test1").unwrap();
+                let mut store1: $type2 = manager.create_store("test", "test1").unwrap();
                 Store::put(&mut store1, 1, b"value1").unwrap();
                 Store::put(&mut store1, 2, b"value2").unwrap();
                 Store::put(&mut store1, 3, b"value3").unwrap();
-                let mut store2: $type2 =
-                    manager.create_store("test", "test2").unwrap();
+                let mut store2: $type2 = manager.create_store("test", "test2").unwrap();
                 Store::put(&mut store2, 4, b"value4").unwrap();
                 Store::put(&mut store2, 5, b"value5").unwrap();
                 Store::put(&mut store2, 6, b"value6").unwrap();
-                let mut iter = store1.iter(IteratorOptions::Forward { from: None, count: None });
-                let mut iter2 = store2.iter(IteratorOptions::Forward { from: Some(5), count: Some(1) });
-                assert_eq!(
-                    iter.next(),
-                    Some((1, b"value1".to_vec())) 
-                );
-                assert_eq!(
-                    iter.next(),
-                    Some((2, b"value2".to_vec()))
-                );
-                assert_eq!(
-                    iter.next(),
-                    Some((3, b"value3".to_vec()))
-                );
+                let mut iter = store1.iter(IteratorOptions::Forward {
+                    from: None,
+                    count: None,
+                });
+                let mut iter2 = store2.iter(IteratorOptions::Forward {
+                    from: Some(5),
+                    count: Some(1),
+                });
+                assert_eq!(iter.next(), Some((1, b"value1".to_vec())));
+                assert_eq!(iter.next(), Some((2, b"value2".to_vec())));
+                assert_eq!(iter.next(), Some((3, b"value3".to_vec())));
                 assert_eq!(iter.next(), None);
-                assert_eq!(
-                    iter2.next(),
-                    Some((5, b"value5".to_vec()))
-                );
+                assert_eq!(iter2.next(), Some((5, b"value5".to_vec())));
                 assert_eq!(iter2.next(), None);
-                let mut iter = store1.iter(IteratorOptions::Forward { from: None, count: Some(2) });
-                let mut iter2 = store2.iter(IteratorOptions::Forward { from: Some(5), count: None});
-                assert_eq!(
-                    iter.next(),
-                    Some((1, b"value1".to_vec())) 
-                );
-                assert_eq!(
-                    iter.next(),
-                    Some((2, b"value2".to_vec()))
-                );
+                let mut iter = store1.iter(IteratorOptions::Forward {
+                    from: None,
+                    count: Some(2),
+                });
+                let mut iter2 = store2.iter(IteratorOptions::Forward {
+                    from: Some(5),
+                    count: None,
+                });
+                assert_eq!(iter.next(), Some((1, b"value1".to_vec())));
+                assert_eq!(iter.next(), Some((2, b"value2".to_vec())));
                 assert_eq!(iter.next(), None);
-                assert_eq!(
-                    iter2.next(),
-                    Some((5, b"value5".to_vec()))
-                );
-                assert_eq!(iter2.next(),
-                    Some((6, b"value6".to_vec()))
-                );
+                assert_eq!(iter2.next(), Some((5, b"value5".to_vec())));
+                assert_eq!(iter2.next(), Some((6, b"value6".to_vec())));
                 assert_eq!(iter2.next(), None);
                 assert!(manager.stop().is_ok());
                 assert!(manager.drop().is_ok());
@@ -366,26 +343,19 @@ macro_rules! test_store_trait {
             #[serial_test::serial]
             fn test_iter_range() {
                 let manager = <$type>::default();
-                let mut store: $type2 =
-                    manager.create_store("test", "test").unwrap();
+                let mut store: $type2 = manager.create_store("test", "test").unwrap();
                 Store::put(&mut store, 1, b"value1").unwrap();
                 Store::put(&mut store, 2, b"value2").unwrap();
                 Store::put(&mut store, 3, b"value3").unwrap();
-                let mut iter = store.iter(IteratorOptions::Range { from: 2, to: Some(4) });
-                assert_eq!(
-                    iter.next(),
-                    Some((2, b"value2".to_vec())) 
-                );
-                assert_eq!(
-                    iter.next(),
-                    Some((3, b"value3".to_vec()))
-                );
+                let mut iter = store.iter(IteratorOptions::Range {
+                    from: 2,
+                    to: Some(4),
+                });
+                assert_eq!(iter.next(), Some((2, b"value2".to_vec())));
+                assert_eq!(iter.next(), Some((3, b"value3".to_vec())));
                 assert_eq!(iter.next(), None);
                 let mut iter = store.iter(IteratorOptions::Range { from: 3, to: None });
-                assert_eq!(
-                    iter.next(),
-                    Some((3, b"value3".to_vec()))
-                );
+                assert_eq!(iter.next(), Some((3, b"value3".to_vec())));
                 assert_eq!(iter.next(), None);
                 assert!(manager.stop().is_ok());
                 assert!(manager.drop().is_ok());
@@ -395,19 +365,14 @@ macro_rules! test_store_trait {
             #[serial_test::serial]
             fn test_last() {
                 let manager = <$type>::default();
-                let mut store: $type2 =
-                    manager.create_store("test", "test1").unwrap();
+                let mut store: $type2 = manager.create_store("test", "test1").unwrap();
                 Store::put(&mut store, 1, b"value1").unwrap();
                 Store::put(&mut store, 2, b"value2").unwrap();
                 Store::put(&mut store, 3, b"value3").unwrap();
-                let mut store2: $type2 =
-                    manager.create_store("test", "test2").unwrap();
+                let mut store2: $type2 = manager.create_store("test", "test2").unwrap();
                 Store::put(&mut store2, 4, b"value4").unwrap();
                 let last = store.last();
-                assert_eq!(
-                    last,
-                    Some((3, b"value3".to_vec()))
-                );
+                assert_eq!(last, Some((3, b"value3".to_vec())));
                 assert!(manager.stop().is_ok());
                 assert!(manager.drop().is_ok());
             }
@@ -416,8 +381,7 @@ macro_rules! test_store_trait {
             #[serial_test::serial]
             fn test_purge() {
                 let manager = <$type>::default();
-                let mut store: $type2 =
-                    manager.create_store("test", "test").unwrap();
+                let mut store: $type2 = manager.create_store("test", "test").unwrap();
                 Store::put(&mut store, 1, b"value1").unwrap();
                 Store::put(&mut store, 2, b"value2").unwrap();
                 Store::put(&mut store, 3, b"value3").unwrap();
@@ -428,9 +392,12 @@ macro_rules! test_store_trait {
                 let value = Store::get(&store, 3).unwrap();
                 assert_eq!(value, b"value3".to_vec());
                 Store::purge(&mut store).unwrap();
-                let mut iter = store.iter(IteratorOptions::Forward { from: None, count: None });
+                let mut iter = store.iter(IteratorOptions::Forward {
+                    from: None,
+                    count: None,
+                });
                 assert_eq!(iter.next(), None);
-                
+
                 assert!(manager.stop().is_ok());
                 assert!(manager.drop().is_ok());
             }
@@ -439,8 +406,7 @@ macro_rules! test_store_trait {
             #[serial_test::serial]
             fn test_flush() {
                 let manager = <$type>::default();
-                let mut store: $type2 =
-                    manager.create_store("test", "test").unwrap();
+                let mut store: $type2 = manager.create_store("test", "test").unwrap();
                 Store::put(&mut store, 1, b"value1").unwrap();
                 Store::put(&mut store, 2, b"value2").unwrap();
                 Store::put(&mut store, 3, b"value3").unwrap();

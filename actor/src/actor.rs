@@ -4,17 +4,14 @@
 //! including the execution context and actor references.
 
 use crate::{
-    ActorPath, Error,
+    ActorPath, Error, ResultExt,
     handler::HandlerHelper,
-    supervision::{Strategy, SupervisionStrategy, RetryStrategy},
+    supervision::{RetryStrategy, Strategy, SupervisionStrategy},
     system::{ActorSignal, Config, SignalSender, SupervicionHandler},
 };
 use async_trait::async_trait;
-use serde::{Serialize, Deserialize, de::DeserializeOwned};
-use std::{
-    any::Any,
-    fmt::Debug
-};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use std::{any::Any, fmt::Debug};
 use tokio::sync::broadcast::{Receiver as EventReceiver, Sender as EventSender};
 use tracing::{debug, error};
 
@@ -27,7 +24,7 @@ const MAX_ACTOR_DEPTH: usize = 100;
 pub trait Event: Serialize + DeserializeOwned + Debug + Clone + Send + Sync + 'static {}
 
 /// Defines what an actor will receive as its message, and with what it should respond.
-pub trait Message: Clone +Send + Sync + 'static {}
+pub trait Message: Clone + Send + Sync + 'static {}
 
 /// Defines the response of a message.
 pub trait Response: Send + Sync + 'static {}
@@ -86,17 +83,17 @@ pub trait Actor: Send + Sync + Sized + 'static {
 
     /// Called before the actor is stopped.
     /// Override this method to perform cleanup when the actor is stopped.
-    /// 
+    ///
     /// # Arguments
     ///
     /// * `context` - The context of the actor.
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// Returns a void result.
-    /// 
+    ///
     /// # Errors
-    /// 
+    ///
     /// Returns an error if the actor could not be stopped.
     ///
     async fn pre_stop(&mut self, _ctx: &mut ActorContext<Self>) -> Result<(), Error> {
@@ -294,18 +291,21 @@ impl<A: Actor> ActorContext<A> {
     /// Gets an actor by path.
     ///     
     /// # Arguments
-    /// 
+    ///
     /// * `path` - The path of the actor to get.
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// * The reference to the actor if found, or None if not found or if the type does not match.
     ///
     pub async fn get_actor<B>(&self, path: &ActorPath) -> Option<ActorRef<B>>
     where
         B: Actor,
     {
-        self.actor_supervisor.get_actor(path).await.unwrap_or_default()
+        self.actor_supervisor
+            .get_actor(path)
+            .await
+            .unwrap_or_default()
     }
 
     /// Gets a child actor by name.
@@ -316,7 +316,7 @@ impl<A: Actor> ActorContext<A> {
     ///
     /// # Returns
     ///
-    /// * The reference to the child actor if found, or None if not found or if the type does not 
+    /// * The reference to the child actor if found, or None if not found or if the type does not
     ///   match.
     ///
     pub async fn get_child<B>(&self, name: &str) -> Option<ActorRef<B>>
@@ -324,14 +324,17 @@ impl<A: Actor> ActorContext<A> {
         B: Actor,
     {
         let child_path = self.path.clone() / name;
-        self.actor_supervisor.get_actor(&child_path).await.unwrap_or_default()
+        self.actor_supervisor
+            .get_actor(&child_path)
+            .await
+            .unwrap_or_default()
     }
 
     /// Gets the parent actor.
-    /// 
+    ///
     /// # Returns
-    /// 
-    /// * The reference to the parent actor if found, or None if not found or if the type does not 
+    ///
+    /// * The reference to the parent actor if found, or None if not found or if the type does not
     ///   match.
     ///
     pub async fn get_parent<B>(&self) -> Option<ActorRef<B>>
@@ -339,7 +342,10 @@ impl<A: Actor> ActorContext<A> {
         B: Actor,
     {
         let parent_path = self.path.parent();
-        self.actor_supervisor.get_actor(&parent_path).await.unwrap_or_default()
+        self.actor_supervisor
+            .get_actor(&parent_path)
+            .await
+            .unwrap_or_default()
     }
 
     /// Checks if a child actor exists by name.
@@ -358,15 +364,15 @@ impl<A: Actor> ActorContext<A> {
     }
 
     /// Stops a child actor by name.
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `name` - The name of the child actor to stop.
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// * `Result<(), Error>` - Ok if the child was stopped successfully, error otherwise.
-    /// 
+    ///
     pub async fn stop_child(&mut self, name: &str) -> Result<(), Error> {
         let child_path = self.path.clone() / name;
         self.actor_supervisor.stop_child(&child_path).await
@@ -376,7 +382,7 @@ impl<A: Actor> ActorContext<A> {
     ///
     /// # Returns
     ///
-    /// * `Result<bool, Error>` - The result of the stop operation. True if there were child 
+    /// * `Result<bool, Error>` - The result of the stop operation. True if there were child
     ///   actors to stop, false if there were no child actors, error otherwise.
     ///
     pub async fn stop_children(&mut self) -> Result<bool, Error> {
@@ -387,19 +393,19 @@ impl<A: Actor> ActorContext<A> {
     ///
     /// # Returns
     ///
-    /// * `Result<bool, Error>` - True if the actor has child actors, false otherwise, or an 
+    /// * `Result<bool, Error>` - True if the actor has child actors, false otherwise, or an
     ///   error if the check failed.
     ///
     pub async fn has_childs(&self) -> bool {
         self.actor_supervisor.has_childs(&self.path).await
     }
 
-    /// Removes a child actor by name. 
-    /// 
+    /// Removes a child actor by name.
+    ///
     /// # Arguments
     ///
     /// * `name` - The name of the child actor to remove.
-    /// 
+    ///
     pub async fn remove_child(&mut self, name: &str) {
         let child_path = self.path.clone() / name;
         self.actor_supervisor.remove_child(&child_path).await
@@ -436,12 +442,11 @@ impl<A: Actor> ActorContext<A> {
     /// * `event` - The event to emit.
     ///
     pub fn emit_event(&self, event: <A as Actor>::Event) -> Result<(), Error> {
-        if let Err(e) = self.event_sender.send(event) {
-            error!("Failed to emit event: {}", e);
-            Err(Error::Event(format!("Failed to emit event: {}", e)))
-        } else {
-            Ok(())
-        }
+        self.event_sender
+            .send(event)
+            .map(|_| ())
+            .actor_event("Failed to emit event")
+            .inspect_err(|e| error!("Failed to emit event: {}", e))
     }
 
     /// Emits an error signal to the parent actor.
@@ -451,17 +456,13 @@ impl<A: Actor> ActorContext<A> {
     /// * `error` - The error to emit.
     ///
     pub async fn emit_error(&self, error: &Error) -> Result<(), Error> {
-        if let Some(signal_sender) = &self.signal_sender
-            && let Err(e) = signal_sender
+        if let Some(signal_sender) = &self.signal_sender {
+            signal_sender
                 .send(ActorSignal::Error(self.path.clone(), error.clone()))
                 .await
-        {
-            //
-            error!("Failed to emit error signal: {}", e);
-            Err(Error::Event(format!(
-                "Failed to emit error signal: {}",
-                e
-            )))
+                .map(|_| ())
+                .actor_event("Failed to emit error signal")
+                .inspect_err(|e| error!("Failed to emit error signal: {}", e))
         } else {
             Ok(())
         }
@@ -474,16 +475,13 @@ impl<A: Actor> ActorContext<A> {
     /// * `error` - The error to emit.
     ///
     pub async fn emit_fault(&self, error: &Error) -> Result<(), Error> {
-        if let Some(signal_sender) = &self.signal_sender
-            && let Err(e) = signal_sender
+        if let Some(signal_sender) = &self.signal_sender {
+            signal_sender
                 .send(ActorSignal::Fault(self.path.clone(), error.clone()))
                 .await
-        {
-            error!("Failed to emit fault signal: {}", e);
-            Err(Error::Event(format!(
-                "Failed to emit fault signal: {}",
-                e
-            )))
+                .map(|_| ())
+                .actor_event("Failed to emit fault signal")
+                .inspect_err(|e| error!("Failed to emit fault signal: {}", e))
         } else {
             Ok(())
         }
@@ -491,35 +489,30 @@ impl<A: Actor> ActorContext<A> {
 
     /// Emits a stopped signal to the parent actor.
     /// This should be called when the actor is stopped to notify the parent actor.
-    /// 
+    ///
     /// # Returns
     /// * `Result<(), Error>` - The result of the emit operation.
     ///
     pub async fn emit_stopped(&self) -> Result<(), Error> {
         if let Some(signal_sender) = &self.signal_sender {
             debug!("Emitting stopped signal for actor {}", self.path());
-            if let Err(e) = signal_sender
+            signal_sender
                 .send(ActorSignal::Stopped(self.path.clone()))
                 .await
-            {
-                error!("Failed to emit stopped signal: {}", e);
-                Err(Error::Event(format!(
-                    "Failed to emit stopped signal: {}",
-                    e
-                )))
-            } else {
-                Ok(())
-            }
-
+                .map(|_| ())
+                .actor_event("Failed to emit stopped signal")
+                .inspect_err(|e| error!("Failed to emit stopped signal: {}", e))
         } else {
-            error!("No signal sender available to emit stopped signal for actor {}", self.path());
+            error!(
+                "No signal sender available to emit stopped signal for actor {}",
+                self.path()
+            );
             Err(Error::Event(format!(
                 "No signal sender available to emit stopped signal for actor {}",
                 self.path()
             )))
         }
     }
-        
 
     /// Retrieves a helper object from the actor system.
     /// Actors can use this to access shared resources like database
@@ -539,7 +532,6 @@ impl<A: Actor> ActorContext<A> {
     {
         self.actor_supervisor.get_helper(name).await
     }
-
 }
 
 /// Actor reference.
@@ -625,26 +617,30 @@ where
     ///     
     /// # Returns
     ///     
-    /// * `Result<A::Response, Error>` - The response from the actor or an error if all retries 
+    /// * `Result<A::Response, Error>` - The response from the actor or an error if all retries
     ///   fail.
     ///
     pub async fn retry_ask(
-        &self, 
-        msg: A::Message, 
-        retry_strategy: &mut Strategy
-    ) -> Result<A::Response, Error>
-    {
+        &self,
+        msg: A::Message,
+        retry_strategy: &mut Strategy,
+    ) -> Result<A::Response, Error> {
         let mut attempts = 0_usize;
         while attempts < retry_strategy.max_retries() {
             debug!(
-                "Attempting ask with retry strategy. Attempt {}/{}", 
-                attempts + 1, 
+                "Attempting ask with retry strategy. Attempt {}/{}",
+                attempts + 1,
                 retry_strategy.max_retries()
             );
             match self.ask(msg.clone()).await {
                 Ok(response) => return Ok(response),
                 Err(e) => {
-                    error!("Ask failed with error: {:?}. Attempt {}/{}", e, attempts + 1, retry_strategy.max_retries());
+                    error!(
+                        "Ask failed with error: {:?}. Attempt {}/{}",
+                        e,
+                        attempts + 1,
+                        retry_strategy.max_retries()
+                    );
                     if let Some(backoff) = retry_strategy.next_backoff() {
                         attempts += 1;
                         tokio::time::sleep(backoff).await;
@@ -958,7 +954,10 @@ mod tests {
 
         // Spawn actor
         tokio::spawn(async move {
-            let mut actor = TestRetryActor { fail_count: 0, fail_threshold: 2 };
+            let mut actor = TestRetryActor {
+                fail_count: 0,
+                fail_threshold: 2,
+            };
             let config = Config::default();
             let mut ctx = ActorContext::new(
                 actor_path,
@@ -974,8 +973,11 @@ mod tests {
         });
 
         // Test retry_ask with a simple retry strategy
-        let mut retry_strategy = Strategy::FixedInterval(FixedIntervalStrategy::new(3, Duration::from_millis(100)));
-        let response = actor_ref.retry_ask(TestMessage::Ping, &mut retry_strategy).await;
+        let mut retry_strategy =
+            Strategy::FixedInterval(FixedIntervalStrategy::new(3, Duration::from_millis(100)));
+        let response = actor_ref
+            .retry_ask(TestMessage::Ping, &mut retry_strategy)
+            .await;
         assert!(response.is_ok());
     }
 }

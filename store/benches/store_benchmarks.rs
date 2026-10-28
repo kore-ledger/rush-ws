@@ -15,7 +15,10 @@
 //!   - `persistent_actor_snapshot_latency` — round-trip latency for taking a snapshot
 //!   - `persistent_actor_state_recovery` — cold-start recovery time from N pre-written events
 
-use actor::{Actor, ActorContext, ActorPath, ActorRef, Config, Error as ActorError, Event, Message, Response, System};
+use actor::{
+    Actor, ActorContext, ActorPath, ActorRef, Config, Error as ActorError, Event, Message,
+    Response, System,
+};
 use async_trait::async_trait;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use serde::{Deserialize, Serialize};
@@ -139,10 +142,13 @@ async fn setup_persistent_system(
     let token = CancellationToken::new();
     let config = Config::default();
     let mut system = System::new(config, token.clone());
-    let manager = FjallDbManager::new(tmp.path().to_str().unwrap())
-        .expect("Failed to open FjallDbManager");
+    let manager =
+        FjallDbManager::new(tmp.path().to_str().unwrap()).expect("Failed to open FjallDbManager");
     system.add_helper("storage", manager).await;
-    let actor = CounterActor { actor_id: actor_id.to_owned(), count: 0 };
+    let actor = CounterActor {
+        actor_id: actor_id.to_owned(),
+        count: 0,
+    };
     let actor_ref = system
         .create_actor(actor, "counter")
         .await
@@ -160,7 +166,10 @@ async fn preload_events(actor_ref: &ActorRef<CounterActor>, n: u64) {
             .expect("tell failed");
     }
     // Barrier: wait until the actor has processed all preceding messages.
-    let _ = actor_ref.ask(CounterMessage::GetCount).await.expect("ask failed");
+    let _ = actor_ref
+        .ask(CounterMessage::GetCount)
+        .await
+        .expect("ask failed");
 }
 
 // ---------------------------------------------------------------------------
@@ -182,8 +191,7 @@ fn bench_journal_put_throughput(c: &mut Criterion) {
             b.iter_custom(|iters| {
                 rt.block_on(async {
                     let tmp = tempfile::tempdir().unwrap();
-                    let manager =
-                        FjallDbManager::new(tmp.path().to_str().unwrap()).unwrap();
+                    let manager = FjallDbManager::new(tmp.path().to_str().unwrap()).unwrap();
                     let store = manager.create_store("BenchJournal", "bench").unwrap();
                     let mut journal = Journal::new(store);
 
@@ -221,10 +229,8 @@ fn bench_journal_put_payload_size(c: &mut Criterion) {
                 b.iter_custom(|iters| {
                     rt.block_on(async {
                         let tmp = tempfile::tempdir().unwrap();
-                        let manager =
-                            FjallDbManager::new(tmp.path().to_str().unwrap()).unwrap();
-                        let store =
-                            manager.create_store("BenchJournal", "bench").unwrap();
+                        let manager = FjallDbManager::new(tmp.path().to_str().unwrap()).unwrap();
+                        let store = manager.create_store("BenchJournal", "bench").unwrap();
                         let mut journal = Journal::new(store);
 
                         let start = std::time::Instant::now();
@@ -257,8 +263,7 @@ fn bench_journal_range_query(c: &mut Criterion) {
             b.iter_custom(|iters| {
                 rt.block_on(async {
                     let tmp = tempfile::tempdir().unwrap();
-                    let manager =
-                        FjallDbManager::new(tmp.path().to_str().unwrap()).unwrap();
+                    let manager = FjallDbManager::new(tmp.path().to_str().unwrap()).unwrap();
                     let store = manager.create_store("BenchJournal", "bench").unwrap();
                     let mut journal = Journal::new(store);
 
@@ -419,75 +424,70 @@ fn bench_persistent_actor_state_recovery(c: &mut Criterion) {
 
     for &n_events in &[10u64, 100, 1_000] {
         group.throughput(criterion::Throughput::Elements(n_events));
-        group.bench_with_input(
-            BenchmarkId::from_parameter(n_events),
-            &n_events,
-            |b, &n| {
-                b.iter_custom(|iters| {
-                    rt.block_on(async {
-                        let mut total = std::time::Duration::ZERO;
+        group.bench_with_input(BenchmarkId::from_parameter(n_events), &n_events, |b, &n| {
+            b.iter_custom(|iters| {
+                rt.block_on(async {
+                    let mut total = std::time::Duration::ZERO;
 
-                        for _ in 0..iters {
-                            // ── Preparation (not timed) ───────────────────────────────
-                            let tmp = tempfile::tempdir().unwrap();
-                            let token = CancellationToken::new();
-                            let config = Config::default();
-                            let mut system = System::new(config, token.clone());
-                            let manager =
-                                FjallDbManager::new(tmp.path().to_str().unwrap()).unwrap();
-                            system.add_helper("storage", manager).await;
+                    for _ in 0..iters {
+                        // ── Preparation (not timed) ───────────────────────────────
+                        let tmp = tempfile::tempdir().unwrap();
+                        let token = CancellationToken::new();
+                        let config = Config::default();
+                        let mut system = System::new(config, token.clone());
+                        let manager = FjallDbManager::new(tmp.path().to_str().unwrap()).unwrap();
+                        system.add_helper("storage", manager).await;
 
-                            let actor = CounterActor {
-                                actor_id: "bench-recovery".to_owned(),
-                                count: 0,
-                            };
-                            let actor_ref = system
-                                .create_actor(actor, "counter")
-                                .await
-                                .expect("create failed");
+                        let actor = CounterActor {
+                            actor_id: "bench-recovery".to_owned(),
+                            count: 0,
+                        };
+                        let actor_ref = system
+                            .create_actor(actor, "counter")
+                            .await
+                            .expect("create failed");
 
-                            // Persist N events and take a snapshot.
-                            preload_events(&actor_ref, n).await;
-                            let _ = actor_ref
-                                .ask(CounterMessage::TakeSnapshot)
-                                .await
-                                .expect("snapshot failed");
+                        // Persist N events and take a snapshot.
+                        preload_events(&actor_ref, n).await;
+                        let _ = actor_ref
+                            .ask(CounterMessage::TakeSnapshot)
+                            .await
+                            .expect("snapshot failed");
 
-                            // Stop the actor so pre_stop flushes to disk.
-                            system.stop_actor("counter").await.expect("stop failed");
-                            // Give the actor time to finish its shutdown sequence.
-                            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+                        // Stop the actor so pre_stop flushes to disk.
+                        system.stop_actor("counter").await.expect("stop failed");
+                        // Give the actor time to finish its shutdown sequence.
+                        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
-                            // ── Timed section: cold-start recovery ───────────────────
-                            let fresh = CounterActor {
-                                actor_id: "bench-recovery".to_owned(),
-                                count: 0,
-                            };
-                            let t0 = std::time::Instant::now();
-                            let recovered_ref = system
-                                .create_actor(fresh, "counter")
-                                .await
-                                .expect("recovery create failed");
-                            total += t0.elapsed();
+                        // ── Timed section: cold-start recovery ───────────────────
+                        let fresh = CounterActor {
+                            actor_id: "bench-recovery".to_owned(),
+                            count: 0,
+                        };
+                        let t0 = std::time::Instant::now();
+                        let recovered_ref = system
+                            .create_actor(fresh, "counter")
+                            .await
+                            .expect("recovery create failed");
+                        total += t0.elapsed();
 
-                            // Verify state was restored (not counted in timing).
-                            let resp = recovered_ref
-                                .ask(CounterMessage::GetCount)
-                                .await
-                                .expect("verify ask failed");
-                            if let CounterResponse::Count(c) = resp {
-                                assert_eq!(c, n, "State recovery returned wrong count");
-                            }
-
-                            token.cancel();
-                            drop(tmp);
+                        // Verify state was restored (not counted in timing).
+                        let resp = recovered_ref
+                            .ask(CounterMessage::GetCount)
+                            .await
+                            .expect("verify ask failed");
+                        if let CounterResponse::Count(c) = resp {
+                            assert_eq!(c, n, "State recovery returned wrong count");
                         }
 
-                        total
-                    })
-                });
-            },
-        );
+                        token.cancel();
+                        drop(tmp);
+                    }
+
+                    total
+                })
+            });
+        });
     }
     group.finish();
 }

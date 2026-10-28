@@ -279,10 +279,7 @@ fn bench_ask_payload_sizes(c: &mut Criterion) {
                         let payload = Payload(vec![0xABu8; size]);
                         let start = std::time::Instant::now();
                         for _ in 0..iters {
-                            let resp = actor_ref
-                                .ask(payload.clone())
-                                .await
-                                .expect("ask failed");
+                            let resp = actor_ref.ask(payload.clone()).await.expect("ask failed");
                             assert_eq!(resp.0.len(), size);
                         }
                         let elapsed = start.elapsed();

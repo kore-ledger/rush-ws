@@ -9,8 +9,8 @@ use crate::{
     supervision::{RetryStrategy, SupervisionStrategy},
     system::{
         ActionReceiver, ActionSender, ActorRegistry, ActorSignal, ChildAction, Config,
-        SignalReceiver, SignalSender, SupervicionHandler, HelpersRegistry,
-        action_channel, signal_channel,
+        HelpersRegistry, SignalReceiver, SignalSender, SupervicionHandler, action_channel,
+        signal_channel,
     },
 };
 
@@ -58,7 +58,8 @@ where
         let handler = HandlerHelper::new(sender);
         let (child_signal_sender, signal_receiver) = signal_channel(conf.signal_buffer_size);
         let (action_sender, action_receiver) = action_channel(conf.action_buffer_size);
-        let system_handler = SupervicionHandler::new(registry, helpers, child_signal_sender.clone());
+        let system_handler =
+            SupervicionHandler::new(registry, helpers, child_signal_sender.clone());
         let context = ActorContext::new(
             actor_path.clone(),
             system_handler,
@@ -193,8 +194,8 @@ where
                             debug!("Actor {} received child stopped signal from {}.", &self.actor_path, child_path);
                             self.context.remove_child(&child_path.key()).await;
                             if !self.context.has_childs().await {
-                                debug!("Actor {} has no more child actors after {} stopped.", 
-                                    &self.actor_path, 
+                                debug!("Actor {} has no more child actors after {} stopped.",
+                                    &self.actor_path,
                                     child_path
                                 );
                                 return ActorLifecycle::Stopped;

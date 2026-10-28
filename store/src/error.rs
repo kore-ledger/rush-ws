@@ -1,8 +1,8 @@
 //
 
-use thiserror::Error;
 use fjall::Error as FjallError;
 use std::io::Error as IoError;
+use thiserror::Error;
 
 /// Errors for `persist` package.
 #[derive(Debug, Error)]

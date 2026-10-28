@@ -22,7 +22,9 @@ impl ActorPath {
         if self.0.len() == 1 {
             self.clone()
         } else if !self.0.is_empty() {
-            ActorPath(Arc::from(self.0.iter().take(1).cloned().collect::<Vec<_>>()))
+            ActorPath(Arc::from(
+                self.0.iter().take(1).cloned().collect::<Vec<_>>(),
+            ))
         } else {
             ActorPath(Arc::new([]))
         }

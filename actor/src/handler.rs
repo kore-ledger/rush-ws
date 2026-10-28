@@ -3,7 +3,7 @@
 //! This module manages the sending and receiving of messages between actors,
 //! providing the mailbox and helpers for communication.
 
-use crate::{Actor, ActorContext, ActorPath, Error};
+use crate::{Actor, ActorContext, ActorPath, Error, ResultExt};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error};
 
@@ -126,13 +126,11 @@ impl<A: Actor> HandlerHelper<A> {
     pub(crate) async fn tell(&self, sender: ActorPath, message: A::Message) -> Result<(), Error> {
         debug!("Telling message to actor from handle reference.");
         let msg = ActorMessage::new(sender, message, None);
-        if let Err(error) = self.sender.send(msg).await {
-            debug!("Failed to tell message! {}", error.to_string());
-            Err(Error::Message(error.to_string()))
-        } else {
-            debug!("Message sent successfully.");
-            Ok(())
-        }
+        self.sender
+            .send(msg)
+            .await
+            .actor_message("Failed to tell message")
+            .inspect(|_| debug!("Message sent successfully."))
     }
 
     /// Sends a message to the actor and waits for a response (request-response).
@@ -160,14 +158,13 @@ impl<A: Actor> HandlerHelper<A> {
         debug!("Asking message to actor from handle reference.");
         let (response_sender, response_receiver) = oneshot::channel();
         let msg = ActorMessage::new(sender, message, Some(response_sender));
-        if let Err(error) = self.sender.send(msg).await {
-            error!("Failed to ask message! {}", error.to_string());
-            Err(Error::Message(error.to_string()))
-        } else {
-            response_receiver
-                .await
-                .map_err(|error| Error::Message(error.to_string()))?
-        }
+        self.sender
+            .send(msg)
+            .await
+            .actor_message("Failed to ask message")?;
+        response_receiver
+            .await
+            .actor_message("Response channel closed")?
     }
 }
 
