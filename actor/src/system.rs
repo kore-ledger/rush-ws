@@ -725,6 +725,7 @@ impl Default for Config {
 #[cfg(test)]
 mod tests {
 
+    use std::future::Future;
     use std::time::Duration;
 
     use super::*;
@@ -799,6 +800,37 @@ mod tests {
 
     pub struct TestHandler;
 
+    async fn wait_until<F, Fut>(description: &str, timeout: Duration, mut condition: F)
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = bool>,
+    {
+        let result = tokio::time::timeout(timeout, async {
+            loop {
+                if condition().await {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "Timed out while waiting for condition: {}",
+            description
+        );
+    }
+
+    async fn wait_for_system_shutdown(system: &System) {
+        wait_until(
+            "system to drain all child actors",
+            Duration::from_secs(2),
+            || async { !system.has_childs().await },
+        )
+        .await;
+    }
+
     #[async_trait::async_trait]
     impl EventHandler<String> for TestHandler {
         async fn notify(&self, event: String) {
@@ -868,8 +900,7 @@ mod tests {
 
         // Stop the system and verify shutdown logs
         token.cancel();
-
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Wait for shutdown logs
+        wait_for_system_shutdown(&system).await;
     }
 
     struct TestErrorActor;
@@ -956,8 +987,7 @@ mod tests {
 
         // Clean up
         token.cancel();
-
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Wait for shutdown logs
+        wait_for_system_shutdown(&system).await;
     }
 
     #[tokio::test]
@@ -978,8 +1008,7 @@ mod tests {
 
         // Clean up
         token.cancel();
-
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Wait for shutdown logs
+        wait_for_system_shutdown(&system).await;
     }
 
     #[tokio::test]
@@ -999,6 +1028,7 @@ mod tests {
             .contains_key(&ActorPath::from("/user/registered_actor")));
 
         token.cancel();
+        wait_for_system_shutdown(&system).await;
     }
 
     #[tokio::test]
@@ -1013,6 +1043,7 @@ mod tests {
         assert!(system.system_supervisor.registry.read().await.is_empty());
 
         token.cancel();
+        wait_for_system_shutdown(&system).await;
     }
 
     #[tokio::test]
@@ -1037,9 +1068,9 @@ mod tests {
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), format!("Received: Message {}", i));
         }
-
         token.cancel();
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Wait for shutdown logs
+        token.cancel();
+        wait_for_system_shutdown(&system).await;
     }
 
     struct CounterActor {
@@ -1080,8 +1111,7 @@ mod tests {
         }
 
         token.cancel();
-
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Wait for shutdown logs
+        wait_for_system_shutdown(&system).await;
     }
 
     #[tokio::test]
@@ -1110,8 +1140,8 @@ mod tests {
         assert!(logs_contain("Handling error: Supervision(\"Test error\")"));
         assert!(logs_contain("System received ChildError"));
         assert!(logs_contain("Stopping children."));
-
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Wait for shutdown logs
+        token.cancel();
+        wait_for_system_shutdown(&system).await;
     }
 
     #[tokio::test]
@@ -1139,8 +1169,7 @@ mod tests {
 
         // Stop the system.
         token.cancel();
-
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Wait for shutdown logs
+        wait_for_system_shutdown(&system).await;
     }
 
     #[tokio::test]
@@ -1185,7 +1214,7 @@ mod tests {
 
         // Stop system
         token.cancel();
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Wait for shutdown logs
+        wait_for_system_shutdown(&system).await;
     }
 
     #[tokio::test]
@@ -1214,7 +1243,7 @@ mod tests {
 
         // Stop the system.
         token.cancel();
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Wait for shutdown logs
+        wait_for_system_shutdown(&system).await;
     }
 
     struct TestRestartParent;
@@ -1326,8 +1355,7 @@ mod tests {
 
         // Stop the system
         token.cancel();
-
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Wait for shutdown logs
+        wait_for_system_shutdown(&system).await;
     }
 
     #[tokio::test]
@@ -1368,8 +1396,7 @@ mod tests {
         assert!(system.has_childs().await);
 
         token.cancel();
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
+        wait_for_system_shutdown(&system).await;
         assert!(!system.has_childs().await);
     }
 }
