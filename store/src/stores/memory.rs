@@ -5,6 +5,7 @@ use crate::Error;
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, RwLock};
+use tracing::error;
 
 type MemoryData = Arc<RwLock<HashMap<(String, String), Arc<RwLock<BTreeMap<String, Vec<u8>>>>>>>;
 
@@ -17,7 +18,10 @@ pub struct MemoryDbManager {
 
 impl DbManager<MemoryStore> for MemoryDbManager {
     fn create_store(&self, name: &str, prefix: &str) -> Result<MemoryStore, crate::Error> {
-        let mut data = self.data.write().unwrap();
+        let mut data = self
+            .data
+            .write()
+            .map_err(|e| Error::Store(format!("Can not lock data: {}", e)))?;
         let key = (name.to_string(), prefix.to_string());
         let store_data = data
             .entry(key)
@@ -41,7 +45,13 @@ pub struct MemoryStore {
 
 impl MemoryStore {
     pub fn iter_prefix(&self, prefix: &str) -> Vec<(u64, Vec<u8>)> {
-        let lock = self.data.read().unwrap();
+        let lock = match self.data.read() {
+            Ok(lock) => lock,
+            Err(e) => {
+                error!("Can not lock data for iter_prefix: {}", e);
+                return Vec::new();
+            }
+        };
         let data: Vec<(String, Vec<u8>)> =
             lock.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         drop(lock);
@@ -49,8 +59,17 @@ impl MemoryStore {
         data.into_iter()
             .filter_map(move |(k, v)| {
                 if k.starts_with(prefix) {
-                    let key = k.split(':').last().unwrap().parse::<u64>().unwrap();
-                    Some((key, v))
+                    let Some(raw_key) = k.rsplit(':').next() else {
+                        error!("Invalid key format in memory store: {}", k);
+                        return None;
+                    };
+                    match raw_key.parse::<u64>() {
+                        Ok(key) => Some((key, v)),
+                        Err(e) => {
+                            error!("Invalid numeric key '{}' in memory store: {}", raw_key, e);
+                            None
+                        }
+                    }
                 } else {
                     None
                 }
@@ -99,9 +118,15 @@ impl Store for MemoryStore {
 
     fn last(&self) -> Option<(u64, Vec<u8>)> {
         let lock = self.data.read().ok()?;
-        lock.iter().rev().next().map(|(k, v)| {
-            let key = k.split(':').last().unwrap().parse::<u64>().unwrap();
-            (key, v.clone())
+        lock.iter().rev().find_map(|(k, v)| {
+            let raw_key = k.rsplit(':').next()?;
+            match raw_key.parse::<u64>() {
+                Ok(key) => Some((key, v.clone())),
+                Err(e) => {
+                    error!("Invalid numeric key '{}' in memory store last(): {}", raw_key, e);
+                    None
+                }
+            }
         })
     }
 
@@ -134,7 +159,10 @@ impl Store for MemoryStore {
                 )
             }
             IteratorOptions::Reverse { from, count } => {
-                let from = from.unwrap_or_else(|| data.last().unwrap().0);
+                let Some(last_key) = data.last().map(|(k, _)| *k) else {
+                    return Box::new(std::iter::empty());
+                };
+                let from = from.unwrap_or(last_key);
                 let count = count.unwrap_or(size);
                 Box::new(
                     data.into_iter()
@@ -144,7 +172,10 @@ impl Store for MemoryStore {
                 )
             }
             IteratorOptions::Range { from, to } => {
-                let to = to.unwrap_or_else(|| data.last().unwrap().0);
+                let Some(last_key) = data.last().map(|(k, _)| *k) else {
+                    return Box::new(std::iter::empty());
+                };
+                let to = to.unwrap_or(last_key);
                 if from > to {
                     Box::new(std::iter::empty())
                 } else {
