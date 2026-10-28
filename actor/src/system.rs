@@ -334,14 +334,27 @@ impl SystemRunner {
                     }
                     Some(signal) = receiver.recv() => {
                         debug!("SystemRunner received signal.");
-                        // Handle system-level signals here
                         let mut system = self.system.write().await;
                         match signal {
                             ActorSignal::Error(path, error) => {
-                                let _ = system.on_child_error(&path, &error).await;
+                                match system.on_child_error(&path, &error).await {
+                                    Ok(()) => {}
+                                    Err(e) => error!(
+                                        "System failed to handle child error for {:?}: {:?}",
+                                        path,
+                                        e
+                                    ),
+                                }
                             }
                             ActorSignal::Fault(path, error) => {
-                                let _ = system.on_child_fault(&path, &error).await;
+                                match system.on_child_fault(&path, &error).await {
+                                    Ok(()) => {}
+                                    Err(e) => error!(
+                                        "System failed to handle child fault for {:?}: {:?}",
+                                        path,
+                                        e
+                                    ),
+                                }
                             }
                             ActorSignal::Stopped(path) => {
                                 debug!("System received ChildStopped signal from {:?}.", path);
@@ -435,7 +448,6 @@ impl SupervicionHandler {
             )));
         }
 
-        // Contruct the actor runner and reference
         let (mut runner, actor_ref, action_sender) = ActorRunner::new(
             actor,
             path.clone(),
@@ -445,31 +457,33 @@ impl SupervicionHandler {
             conf,
         );
 
-        // Insert the actor reference into the registry before initialization
-        // to allow for recursive actor creation
-        self.registry
-            .write()
-            .await
-            .insert(path.clone(), Box::new(actor_ref.clone()));
-
-        // Init the actor
         let (init_sender, init_receiver) = oneshot::channel();
         tokio::spawn(async move {
             runner.init(Some(init_sender)).await;
         });
 
-        // Wait for initialization to complete
-        let init_result = init_receiver
-            .await
-            .expect("Sender should not be dropped before initialization completes or fails.");
+        let init_result = match init_receiver.await {
+            Ok(result) => result,
+            Err(_) => {
+                self.registry.write().await.remove(path);
+                self.action_senders.write().await.remove(path);
+                return Err(Error::StartActor(format!(
+                    "Actor '{}' initialization channel closed before completion.",
+                    path
+                )));
+            }
+        };
 
         if let Err(e) = init_result {
-            // Remove the actor reference from the registry if initialization fails
             self.registry.write().await.remove(path);
+            self.action_senders.write().await.remove(path);
             return Err(e);
         }
 
-        // Insert the child into supervision
+        self.registry
+            .write()
+            .await
+            .insert(path.clone(), Box::new(actor_ref.clone()));
         self.action_senders
             .write()
             .await
@@ -567,23 +581,21 @@ impl SupervicionHandler {
     /// * `Result<(), Error>` - Ok if the child was stopped successfully, error otherwise.
     ///
     pub async fn stop_child(&mut self, path: &ActorPath) -> Result<(), Error> {
-        // Remove from registry
+        // Remove from registry first to keep the actor lookup consistent with stop intent.
         self.registry.write().await.remove(path);
-        let mut action_senders = self.action_senders.write().await;
-        if let Some(action_sender) = action_senders.get(path) {
-            debug!("Sending stop action to child '{}'.", path);
-            action_sender
-                .send(ChildAction::Stop)
-                .await
-                .actor_supervision("Failed to send stop action to child")?;
-            // Remove the action sender from the registry after sending the stop signal.
-            action_senders.remove(path);
-        } else {
+        let action_sender = self.action_senders.write().await.remove(path);
+        let Some(action_sender) = action_sender else {
             return Err(Error::Supervision(format!(
                 "Child '{}' not found for stopping.",
                 path
             )));
-        }
+        };
+
+        debug!("Sending stop action to child '{}'.", path);
+        action_sender
+            .send(ChildAction::Stop)
+            .await
+            .actor_supervision("Failed to send stop action to child")?;
         Ok(())
     }
 
@@ -594,8 +606,14 @@ impl SupervicionHandler {
     /// * `Result<(), Error>` - Ok if all children restarted successfully, error otherwise.
     ///
     pub async fn restart_children(&self) -> Result<(), Error> {
-        let action_senders = self.action_senders.write().await;
-        for (_path, action_sender) in action_senders.iter() {
+        let action_senders: Vec<ActionSender> = self
+            .action_senders
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect();
+        for action_sender in action_senders {
             action_sender
                 .send(ChildAction::Restart)
                 .await
@@ -876,6 +894,28 @@ mod tests {
         }
     }
 
+    struct TestPanicActor;
+
+    #[async_trait::async_trait]
+    impl Actor for TestPanicActor {
+        type Message = String;
+        type Response = String;
+        type Event = ();
+
+        async fn handle(
+            &mut self,
+            _ctx: &mut ActorContext<Self>,
+            _sender: &ActorPath,
+            _msg: Self::Message,
+        ) -> Result<Self::Response, Error> {
+            Ok("ok".to_owned())
+        }
+
+        async fn pre_start(&mut self, _ctx: &mut ActorContext<Self>) -> Result<(), Error> {
+            panic!("pre_start panic to close init channel")
+        }
+    }
+
     #[tokio::test]
     #[serial_test::serial]
     async fn test_system_multiple_actors() {
@@ -933,10 +973,46 @@ mod tests {
         let retrieved = system.get_actor::<TestErrorActor>("error_actor").await;
         assert!(retrieved.is_err());
 
+        // Verify the registry remains empty when startup fails
+        assert!(system.system_supervisor.registry.read().await.is_empty());
+
         // Clean up
         token.cancel();
 
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Wait for shutdown logs
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_actor_registers_only_after_successful_startup() {
+        let token = CancellationToken::new();
+        let mut system = System::new(Config::default(), token.clone());
+
+        let actor_ref = system.create_actor(TestActor, "registered_actor").await;
+        assert!(actor_ref.is_ok());
+        assert!(system.actor_exists("registered_actor").await.unwrap());
+        assert!(system
+            .system_supervisor
+            .registry
+            .read()
+            .await
+            .contains_key(&ActorPath::from("/user/registered_actor")));
+
+        token.cancel();
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_startup_channel_closed_is_reported_as_start_actor_error() {
+        let token = CancellationToken::new();
+        let mut system = System::new(Config::default(), token.clone());
+
+        let result = system.create_actor(TestPanicActor, "panic_actor").await;
+        assert!(matches!(result, Err(Error::StartActor(_))));
+        assert!(!system.actor_exists("panic_actor").await.unwrap_or(false));
+        assert!(system.system_supervisor.registry.read().await.is_empty());
+
+        token.cancel();
     }
 
     #[tokio::test]
@@ -1252,5 +1328,48 @@ mod tests {
         token.cancel();
 
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Wait for shutdown logs
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_stop_child_cleans_state_on_send_failure() {
+        let mut supervisor = SupervicionHandler::default();
+        let path = ActorPath::from("/user/failing_child");
+        let (action_sender, action_receiver) = action_channel(1);
+        drop(action_receiver);
+
+        supervisor
+            .registry
+            .write()
+            .await
+            .insert(path.clone(), Box::new(()));
+        supervisor
+            .action_senders
+            .write()
+            .await
+            .insert(path.clone(), action_sender);
+
+        let result = supervisor.stop_child(&path).await;
+        assert!(result.is_err());
+        assert!(!supervisor.registry.read().await.contains_key(&path));
+        assert!(!supervisor.action_senders.read().await.contains_key(&path));
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_shutdown_cleans_all_children_after_cancellation() {
+        let token = CancellationToken::new();
+        let mut system = System::new(Config::default(), token.clone());
+
+        system.create_actor(TestActor, "shutdown_1").await.unwrap();
+        system.create_actor(TestActor, "shutdown_2").await.unwrap();
+        system.create_actor(TestActor, "shutdown_3").await.unwrap();
+
+        assert!(system.has_childs().await);
+
+        token.cancel();
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+        assert!(!system.has_childs().await);
     }
 }

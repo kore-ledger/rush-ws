@@ -170,9 +170,9 @@ pub trait Actor: Send + Sync + Sized + 'static {
         // Default implementation from child actor errors.
         debug!("Handling error: {:?}", error);
         // Emit the error to the parent actor.
-        ctx.emit_error(error).await.unwrap_or_else(|e| {
+        if let Err(e) = ctx.emit_error(error).await {
             error!("Failed to emit fault for child error: {:?}", e);
-        });
+        }
     }
 
     /// Called when a fault occurs in a child actor.
@@ -202,9 +202,9 @@ pub trait Actor: Send + Sync + Sized + 'static {
         // Default implementation from child actor errors.
         debug!("Handling fault: {:?}", error);
         // Emit the error to the parent actor.
-        ctx.emit_fault(error).await.unwrap_or_else(|e| {
+        if let Err(e) = ctx.emit_fault(error).await {
             error!("Failed to emit fault for child fault: {:?}", e);
-        });
+        }
     }
 }
 
@@ -461,10 +461,13 @@ impl<A: Actor> ActorContext<A> {
                 .send(ActorSignal::Error(self.path.clone(), error.clone()))
                 .await
                 .map(|_| ())
-                .actor_event("Failed to emit error signal")
+                .actor_supervision("Failed to emit error signal")
                 .inspect_err(|e| error!("Failed to emit error signal: {}", e))
         } else {
-            Ok(())
+            Err(Error::Supervision(format!(
+                "No signal sender available to emit error signal for actor {}",
+                self.path()
+            )))
         }
     }
 
@@ -480,10 +483,13 @@ impl<A: Actor> ActorContext<A> {
                 .send(ActorSignal::Fault(self.path.clone(), error.clone()))
                 .await
                 .map(|_| ())
-                .actor_event("Failed to emit fault signal")
+                .actor_supervision("Failed to emit fault signal")
                 .inspect_err(|e| error!("Failed to emit fault signal: {}", e))
         } else {
-            Ok(())
+            Err(Error::Supervision(format!(
+                "No signal sender available to emit fault signal for actor {}",
+                self.path()
+            )))
         }
     }
 
@@ -500,14 +506,14 @@ impl<A: Actor> ActorContext<A> {
                 .send(ActorSignal::Stopped(self.path.clone()))
                 .await
                 .map(|_| ())
-                .actor_event("Failed to emit stopped signal")
+                .actor_supervision("Failed to emit stopped signal")
                 .inspect_err(|e| error!("Failed to emit stopped signal: {}", e))
         } else {
             error!(
                 "No signal sender available to emit stopped signal for actor {}",
                 self.path()
             );
-            Err(Error::Event(format!(
+            Err(Error::Supervision(format!(
                 "No signal sender available to emit stopped signal for actor {}",
                 self.path()
             )))
@@ -625,24 +631,26 @@ where
         msg: A::Message,
         retry_strategy: &mut Strategy,
     ) -> Result<A::Response, Error> {
-        let mut attempts = 0_usize;
-        while attempts < retry_strategy.max_retries() {
+        let max_attempts = retry_strategy.max_retries();
+        if max_attempts == 0 {
+            return Err(Error::RetryLimitExceeded);
+        }
+
+        for attempt in 1..=max_attempts {
             debug!(
                 "Attempting ask with retry strategy. Attempt {}/{}",
-                attempts + 1,
-                retry_strategy.max_retries()
+                attempt, max_attempts
             );
             match self.ask(msg.clone()).await {
                 Ok(response) => return Ok(response),
                 Err(e) => {
                     error!(
                         "Ask failed with error: {:?}. Attempt {}/{}",
-                        e,
-                        attempts + 1,
-                        retry_strategy.max_retries()
+                        e, attempt, max_attempts
                     );
-                    if let Some(backoff) = retry_strategy.next_backoff() {
-                        attempts += 1;
+                    if attempt < max_attempts
+                        && let Some(backoff) = retry_strategy.next_backoff()
+                    {
                         tokio::time::sleep(backoff).await;
                     }
                 }
@@ -689,7 +697,10 @@ mod tests {
     use super::*;
     use crate::{Actor, ActorPath, Event, Message, Response, handler::mailbox};
     use serde::{Deserialize, Serialize};
-    use std::sync::Arc;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
     use std::time::Duration;
     use tokio::sync::{RwLock, broadcast};
     use tokio::time::sleep;
@@ -807,6 +818,30 @@ mod tests {
         );
 
         assert_eq!(context.path().to_string(), "/parent/child");
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_child_signal_emission_classifies_supervision_errors() {
+        let actor_path = ActorPath::from("/parent/child");
+        let (event_sender, _) = broadcast::channel(10);
+        let config = Config::default();
+        let context: ActorContext<TestActor> = ActorContext::new(
+            actor_path.clone(),
+            SupervicionHandler::default(),
+            event_sender,
+            None,
+            &config,
+        );
+
+        let error = Error::Supervision("signal failed".to_owned());
+        let error_result = context.emit_error(&error).await;
+        let fault_result = context.emit_fault(&error).await;
+        let stopped_result = context.emit_stopped().await;
+
+        assert!(matches!(error_result, Err(Error::Supervision(_))));
+        assert!(matches!(fault_result, Err(Error::Supervision(_))));
+        assert!(matches!(stopped_result, Err(Error::Supervision(_))));
     }
 
     struct StatefulActor {
@@ -942,6 +977,27 @@ mod tests {
         }
     }
 
+    struct AlwaysFailRetryActor {
+        attempt_counter: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl Actor for AlwaysFailRetryActor {
+        type Message = TestMessage;
+        type Response = TestResponse;
+        type Event = TestEvent;
+
+        async fn handle(
+            &mut self,
+            _ctx: &mut ActorContext<Self>,
+            _sender: &ActorPath,
+            _msg: Self::Message,
+        ) -> Result<Self::Response, Error> {
+            self.attempt_counter.fetch_add(1, Ordering::SeqCst);
+            Err(Error::Message("Always fail".to_owned()))
+        }
+    }
+
     #[tokio::test]
     #[serial_test::serial]
     async fn test_ask_retry() {
@@ -979,5 +1035,122 @@ mod tests {
             .retry_ask(TestMessage::Ping, &mut retry_strategy)
             .await;
         assert!(response.is_ok());
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_retry_ask_exhausts_after_max_retries() {
+        use crate::supervision::NoIntervalStrategy;
+
+        let (sender, mut receiver) = mailbox::<TestRetryActor>(10);
+        let handler = HandlerHelper::new(sender);
+        let actor_path = ActorPath::from("retry_limit_actor");
+        let (event_sender, _) = broadcast::channel(10);
+        let actor_ref = ActorRef::new(actor_path.clone(), handler, event_sender.subscribe());
+
+        tokio::spawn(async move {
+            let mut actor = TestRetryActor {
+                fail_count: 0,
+                fail_threshold: usize::MAX,
+            };
+            let config = Config::default();
+            let mut ctx = ActorContext::new(
+                actor_path,
+                SupervicionHandler::default(),
+                event_sender,
+                None,
+                &config,
+            );
+
+            while let Some(msg) = receiver.recv().await {
+                msg.handle(&mut actor, &mut ctx).await;
+            }
+        });
+
+        let mut retry_strategy = Strategy::NoInterval(NoIntervalStrategy::new(2));
+        let result = tokio::time::timeout(
+            Duration::from_millis(500),
+            actor_ref.retry_ask(TestMessage::Ping, &mut retry_strategy),
+        )
+        .await;
+
+        assert!(result.is_ok(), "retry_ask should terminate once max_retries is reached");
+        assert!(matches!(result.unwrap(), Err(Error::RetryLimitExceeded)));
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_retry_ask_attempts_exactly_max_retries() {
+        use crate::supervision::NoIntervalStrategy;
+
+        let (sender, mut receiver) = mailbox::<AlwaysFailRetryActor>(10);
+        let handler = HandlerHelper::new(sender);
+        let actor_path = ActorPath::from("retry_exact_attempts_actor");
+        let (event_sender, _) = broadcast::channel(10);
+        let actor_ref = ActorRef::new(actor_path.clone(), handler, event_sender.subscribe());
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempts_for_actor = attempts.clone();
+
+        tokio::spawn(async move {
+            let mut actor = AlwaysFailRetryActor {
+                attempt_counter: attempts_for_actor,
+            };
+            let config = Config::default();
+            let mut ctx = ActorContext::new(
+                actor_path,
+                SupervicionHandler::default(),
+                event_sender,
+                None,
+                &config,
+            );
+
+            while let Some(msg) = receiver.recv().await {
+                msg.handle(&mut actor, &mut ctx).await;
+            }
+        });
+
+        let mut retry_strategy = Strategy::NoInterval(NoIntervalStrategy::new(2));
+        let result = actor_ref.retry_ask(TestMessage::Ping, &mut retry_strategy).await;
+
+        assert!(matches!(result, Err(Error::RetryLimitExceeded)));
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_retry_ask_with_zero_retries_fails_immediately() {
+        use crate::supervision::NoIntervalStrategy;
+
+        let (sender, mut receiver) = mailbox::<AlwaysFailRetryActor>(10);
+        let handler = HandlerHelper::new(sender);
+        let actor_path = ActorPath::from("retry_zero_actor");
+        let (event_sender, _) = broadcast::channel(10);
+        let actor_ref = ActorRef::new(actor_path.clone(), handler, event_sender.subscribe());
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempts_for_actor = attempts.clone();
+
+        tokio::spawn(async move {
+            let mut actor = AlwaysFailRetryActor {
+                attempt_counter: attempts_for_actor,
+            };
+            let config = Config::default();
+            let mut ctx = ActorContext::new(
+                actor_path,
+                SupervicionHandler::default(),
+                event_sender,
+                None,
+                &config,
+            );
+
+            while let Some(msg) = receiver.recv().await {
+                msg.handle(&mut actor, &mut ctx).await;
+            }
+        });
+
+        let mut retry_strategy = Strategy::NoInterval(NoIntervalStrategy::new(0));
+        let result = actor_ref.retry_ask(TestMessage::Ping, &mut retry_strategy).await;
+
+        assert!(matches!(result, Err(Error::RetryLimitExceeded)));
+        assert_eq!(attempts.load(Ordering::SeqCst), 0);
     }
 }
