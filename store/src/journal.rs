@@ -212,16 +212,16 @@ impl<S: Store> BaseJournal<S> {
             let data = self.get(seq)?;
             Self::write_data(&mut writer, &data)
                 .await
-                .map_err(|e| ActorError::Store(format!("Failed to write event data: {}", e)))?;
+                .actor_store("Failed to write event data")?;
         }
         writer
             .flush()
             .await
-            .map_err(|e| ActorError::Store(format!("Failed to flush export writer: {}", e)))?;
+            .actor_store("Failed to flush export writer")?;
         writer
             .shutdown()
             .await
-            .map_err(|e| ActorError::Store(format!("Failed to shutdown export writer: {}", e)))?;
+            .actor_store("Failed to shutdown export writer")?;
         Ok(())
     }
 
@@ -239,7 +239,7 @@ impl<S: Store> BaseJournal<S> {
         // Purge existing events before importing new ones.
         self.store
             .purge()
-            .map_err(|e| ActorError::Store(format!("Purge store error: {}", e)))?;
+            .actor_store("Purge store error")?;
         self.next_sequence = 0;
 
         // Construct the full path to the export file.

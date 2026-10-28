@@ -61,7 +61,7 @@ pub trait SnapshotActor: Actor + Debug + Serialize + DeserializeOwned {
                     data: serialized_state,
                 })
                 .await
-                .map_err(|e| ActorError::Store(format!("Failed to save snapshot: {}", e)))
+                .actor_store("Failed to save snapshot")
         } else {
             Err(ActorError::Store("Snapshotter actor not found".to_string()))
         }
@@ -141,7 +141,7 @@ pub trait SnapshotActor: Actor + Debug + Serialize + DeserializeOwned {
             snapshotter
                 .tell(SnapshotMessage::Flush)
                 .await
-                .map_err(|e| ActorError::Store(format!("Failed to flush snapshot: {}", e)))
+                .actor_store("Failed to flush snapshot")
         } else {
             Err(ActorError::Store("Snapshotter actor not found".to_string()))
         }

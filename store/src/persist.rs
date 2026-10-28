@@ -87,7 +87,7 @@ pub trait PersistentActor: Actor + Debug + Serialize + DeserializeOwned {
             .ok_or_else(|| ActorError::Store("Snapshotter not found".to_string()))?
             .ask(SnapshotMessage::LastSnapshot)
             .await
-            .map_err(|e| ActorError::Store(format!("Failed to get last snapshot: {}", e)))?;
+            .actor_store("Failed to get last snapshot")?;
         if let SnapshotResponse::LastResult(Some((snapshot_from, snapshot_data))) = state {
             from = snapshot_from;
             let deserialized_state: Self = from_slice(&snapshot_data)
@@ -104,7 +104,7 @@ pub trait PersistentActor: Actor + Debug + Serialize + DeserializeOwned {
             .ok_or_else(|| ActorError::Store("Journal not found".to_string()))?
             .ask(JournalMessage::Range(from + 1, None))
             .await
-            .map_err(|e| ActorError::Store(format!("Failed to get events from journal: {}", e)))?;
+            .actor_store("Failed to get events from journal")?;
         if let JournalResponse::Events(events) = events {
             for (_, event_data) in events {
                 let event: Self::Event =
@@ -139,33 +139,19 @@ pub trait PersistentActor: Actor + Debug + Serialize + DeserializeOwned {
         let journal_name = format!("{}-Journal", type_name);
         let journal_store = store_manager
             .create_store(&journal_name, &self.id())
-            .map_err(|e| ActorError::Store(format!("Failed to create journal store: {}", e)))?;
+            .actor_store("Failed to create journal store")?;
         let snapshotter_name = format!("{}-Snapshotter", type_name);
         let snapshotter_store = store_manager
             .create_store(&snapshotter_name, &self.id())
-            .map_err(|e| ActorError::Store(format!("Failed to create snapshotter store: {}", e)))?;
-        if let Err(e) = ctx
-            .create_child(Journal::new(journal_store), "journal")
+            .actor_store("Failed to create snapshotter store")?;
+        ctx.create_child(Journal::new(journal_store), "journal")
             .await
-        {
-            println!("Failed to create journal actor: {}", e);
-            error!("Failed to create journal actor: {}", e);
-            return Err(ActorError::Store(format!(
-                "Failed to create journal actor: {}",
-                e
-            )));
-        }
-        if let Err(e) = ctx
-            .create_child(Snapshotter::new(snapshotter_store), "snapshotter")
+            .actor_store("Failed to create journal actor")
+            .inspect_err(|e| error!("Failed to create journal actor: {}", e))?;
+        ctx.create_child(Snapshotter::new(snapshotter_store), "snapshotter")
             .await
-        {
-            println!("Failed to create snapshotter actor: {}", e);
-            error!("Failed to create snapshotter actor: {}", e);
-            return Err(ActorError::Store(format!(
-                "Failed to create snapshotter actor: {}",
-                e
-            )));
-        }
+            .actor_store("Failed to create snapshotter actor")
+            .inspect_err(|e| error!("Failed to create snapshotter actor: {}", e))?;
         Ok(())
     }
 
@@ -242,10 +228,8 @@ pub trait PersistentActor: Actor + Debug + Serialize + DeserializeOwned {
             let response = journal
                 .ask(JournalMessage::Put(serialized_event))
                 .await
-                .map_err(|e| {
-                    error!("Failed to send event to journal: {}", e);
-                    ActorError::Store(format!("Failed to send event to journal: {}", e))
-                })?;
+                .actor_store("Failed to send event to journal")
+                .inspect_err(|e| error!("Failed to send event to journal: {}", e))?;
             let sn = if let JournalResponse::LastSequence(seq) = response {
                 seq
             } else {
@@ -319,10 +303,8 @@ pub trait PersistentActor: Actor + Debug + Serialize + DeserializeOwned {
             let response = journal
                 .ask(JournalMessage::Insert(sequence, bytes))
                 .await
-                .map_err(|e| {
-                    error!("Failed to send insert request to journal: {}", e);
-                    ActorError::Store(format!("Failed to send insert request to journal: {}", e))
-                })?;
+                .actor_store("Failed to send insert request to journal")
+                .inspect_err(|e| error!("Failed to send insert request to journal: {}", e))?;
             if let JournalResponse::None = response {
                 Ok(())
             } else {
@@ -359,13 +341,8 @@ pub trait PersistentActor: Actor + Debug + Serialize + DeserializeOwned {
             let response = journal
                 .ask(JournalMessage::Range(from_sequence, to_sequence))
                 .await
-                .map_err(|e| {
-                    error!("Failed to send get events request to journal: {}", e);
-                    ActorError::Store(format!(
-                        "Failed to send get events request to journal: {}",
-                        e
-                    ))
-                })?;
+                .actor_store("Failed to send get events request to journal")
+                .inspect_err(|e| error!("Failed to send get events request to journal: {}", e))?;
             if let JournalResponse::Events(records) = response {
                 let mut events = Vec::new();
                 for (_, bytes) in records {
@@ -394,13 +371,8 @@ pub trait PersistentActor: Actor + Debug + Serialize + DeserializeOwned {
             let response = journal
                 .ask(JournalMessage::Get(sequence))
                 .await
-                .map_err(|e| {
-                    error!("Failed to send get event request to journal: {}", e);
-                    ActorError::Store(format!(
-                        "Failed to send get event request to journal: {}",
-                        e
-                    ))
-                })?;
+                .actor_store("Failed to send get event request to journal")
+                .inspect_err(|e| error!("Failed to send get event request to journal: {}", e))?;
             if let JournalResponse::Event(bytes) = response {
                 let event =
                     from_slice(&bytes).actor_deserialization("Failed to deserialize event")?;
@@ -444,20 +416,16 @@ pub trait PersistentActor: Actor + Debug + Serialize + DeserializeOwned {
             .ok_or_else(|| ActorError::Store("Snapshotter not found".to_string()))?;
 
         // Flush the journal and snapshotter
-        journal.tell(JournalMessage::Flush).await.map_err(|e| {
-            error!("Failed to send flush message to journal: {}", e);
-            ActorError::Store(format!("Failed to send flush message to journal: {}", e))
-        })?;
+        journal
+            .tell(JournalMessage::Flush)
+            .await
+            .actor_store("Failed to send flush message to journal")
+            .inspect_err(|e| error!("Failed to send flush message to journal: {}", e))?;
         snapshotter
             .tell(SnapshotMessage::Flush)
             .await
-            .map_err(|e| {
-                error!("Failed to send flush message to snapshotter: {}", e);
-                ActorError::Store(format!(
-                    "Failed to send flush message to snapshotter: {}",
-                    e
-                ))
-            })?;
+            .actor_store("Failed to send flush message to snapshotter")
+            .inspect_err(|e| error!("Failed to send flush message to snapshotter: {}", e))?;
         debug!("Flushed journal and snapshotter");
 
         Ok(())
@@ -474,12 +442,12 @@ pub trait PersistentActor: Actor + Debug + Serialize + DeserializeOwned {
     ///   there was a problem persisting the snapshot.
     ///
     async fn snapshot(&mut self, ctx: &mut ActorContext<Self>) -> Result<(), ActorError> {
-        let sn = self.last_sequence(ctx).await.map_err(|_| {
-            error!("Failed to get last journal sequence, cannot create snapshot");
-            ActorError::Store("Failed to get last journal sequence".to_string())
-        })?;
-        let serialized_state = to_vec(self)
-            .map_err(|e| ActorError::Serialization(format!("Failed to serialize state: {}", e)))?;
+        let sn = self
+            .last_sequence(ctx)
+            .await
+            .actor_store("Failed to get last journal sequence")
+            .inspect_err(|e| error!("Failed to get last journal sequence, cannot create snapshot: {}", e))?;
+        let serialized_state = to_vec(self).actor_serialization("Failed to serialize state")?;
         if let Some(snapshotter) = self.snapshotter(ctx).await {
             snapshotter
                 .tell(SnapshotMessage::SaveSnapshot {
@@ -487,10 +455,8 @@ pub trait PersistentActor: Actor + Debug + Serialize + DeserializeOwned {
                     data: serialized_state,
                 })
                 .await
-                .map_err(|e| {
-                    error!("Failed to send snapshot to snapshotter: {}", e);
-                    ActorError::Store(format!("Failed to send snapshot to snapshotter: {}", e))
-                })?;
+                .actor_store("Failed to send snapshot to snapshotter")
+                .inspect_err(|e| error!("Failed to send snapshot to snapshotter: {}", e))?;
             debug!("Persisted snapshot to snapshotter");
             Ok(())
         } else {
