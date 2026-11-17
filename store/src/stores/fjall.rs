@@ -15,7 +15,7 @@ use super::{DbManager, IteratorOptions, Store};
 use crate::Error;
 
 use fjall::{Database, Guard, KeyspaceCreateOptions};
-use std::{iter::DoubleEndedIterator, path::PathBuf, u64::MAX};
+use std::{iter::DoubleEndedIterator, path::PathBuf};
 
 /// A database manager that creates Fjall stores. It's intended for production use and provides a
 /// persistent storage solution.
@@ -191,7 +191,7 @@ impl Store for FjallStore {
             IteratorOptions::Forward { from, count } => {
                 // Implement forward iteration logic here
                 let from = from.unwrap_or(0);
-                let count = count.unwrap_or(MAX);
+                let count = count.unwrap_or(u64::MAX);
                 Box::new(
                     iter.filter_map(move |(key, value)| {
                         if key < from {
@@ -205,7 +205,7 @@ impl Store for FjallStore {
             IteratorOptions::Reverse { from, count } => {
                 // Implement reverse iteration logic here
                 let from = from.unwrap_or(self.last_key());
-                let count = count.unwrap_or(MAX);
+                let count = count.unwrap_or(u64::MAX);
                 Box::new(
                     iter.rev()
                         .filter_map(move |(key, value)| {

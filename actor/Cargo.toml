@@ -6,7 +6,6 @@ rust-version.workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
-
 crossbeam = { workspace = true }
 futures = { workspace = true, features = ["async-await"]}
 serde = { workspace = true, features = ["derive"] }
